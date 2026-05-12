@@ -1,0 +1,21 @@
+# Build output
+bin/
+obj/
+_build_verify/
+_verify_runtime/
+_verify_runtime2/
+
+# IDE and local tooling
+.vs/
+.dotnet/
+.nuget/
+
+# User-specific files
+*.user
+*.suo
+
+# Excel files to keep out of the repo
+RxOffice Accounting Issues.xlsx
+RxOffice Accounting Issues1.xlsx
+ArData Excel Format/peren 3-16-30, 2026.xls
+ArData Excel Format/peren 3-16-30, 2026.xlsx
