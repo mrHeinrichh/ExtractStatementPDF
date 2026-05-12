@@ -43,13 +43,11 @@ class OrderSnapshot:
     variance: float
 
 
-def build_source_lookup(soa_root: Path) -> dict[str, OrderSnapshot]:
+def build_source_lookup(soa_root: Path) -> tuple[dict[str, OrderSnapshot], set[str]]:
     lookup: dict[str, OrderSnapshot] = {}
-    for month_dir in sorted(
-        (path for path in soa_root.iterdir() if path.is_dir() and MONTH_DIR_RE.match(path.name)),
-        key=lambda p: p.name.lower(),
-    ):
-        files = get_month_source_files(month_dir)
+    source_months: set[str] = set()
+    for month_label, files in discover_source_groups(soa_root):
+        source_months.add(month_label)
         csv_files = [path for path in files if path.suffix.lower() == ".csv"]
         ar_files = [path for path in files if path.suffix.lower() in {".pdf", ".xls", ".xlsx"}]
         for csv_file in csv_files:
@@ -60,7 +58,6 @@ def build_source_lookup(soa_root: Path) -> dict[str, OrderSnapshot]:
 
             rx_orders = parse_rx_csv(csv_file)
             ar_orders = parse_ar_orders(matching_ar)
-            month_label = extract_month_label(csv_file)
             customer_key = base_key
 
             for reference in sorted(set(rx_orders) | set(ar_orders)):
@@ -80,7 +77,31 @@ def build_source_lookup(soa_root: Path) -> dict[str, OrderSnapshot]:
                     ar_net,
                     variance,
                 )
-    return lookup
+    return lookup, source_months
+
+
+def discover_source_groups(source_root: Path) -> list[tuple[str, list[Path]]]:
+    if source_root.is_dir() and MONTH_DIR_RE.match(source_root.name):
+        return [(extract_month_label(source_root), get_month_source_files(source_root))]
+
+    ancestor_month = next((parent for parent in [source_root, *source_root.parents] if MONTH_DIR_RE.match(parent.name)), None)
+    if ancestor_month is not None:
+        files = [path for path in source_root.rglob("*") if path.is_file()]
+        files = [
+            path
+            for path in files
+            if path.name not in EXCLUDED_FILES
+            and path.suffix.lower() in {".csv", ".pdf", ".xls", ".xlsx"}
+        ]
+        return [(extract_month_label(ancestor_month), files)]
+
+    return [
+        (extract_month_label(path), get_month_source_files(path))
+        for path in sorted(
+            (path for path in source_root.iterdir() if path.is_dir() and MONTH_DIR_RE.match(path.name)),
+            key=lambda p: p.name.lower(),
+        )
+    ]
 
 
 def get_month_source_files(month_dir: Path) -> list[Path]:
@@ -149,6 +170,16 @@ def build_source_lookup_key(path: Path) -> str:
 
 
 def extract_month_label(path: Path) -> str:
+    if path.is_dir() and MONTH_DIR_RE.match(path.name):
+        month_name = path.name.split("-", 1)[1]
+        for fmt in ("%B %Y", "%B"):
+            try:
+                parsed = datetime.strptime(month_name, fmt)
+                year = parsed.year if fmt == "%B %Y" else 2025
+                return datetime(year, parsed.month, 1).strftime("%B %Y")
+            except ValueError:
+                pass
+
     parts = [part.strip() for part in path.stem.split("_") if part.strip()]
     for part in parts:
         if MONTH_TOKEN_RE.fullmatch(part):
@@ -200,35 +231,40 @@ def write_headers(ws) -> None:
         ws.cell(1, offset).value = header
 
 
-def add_columns_and_fill(workbook_path: Path, lookup: dict[str, OrderSnapshot], output_root: Path) -> tuple[list[Path], dict[str, list[int]], int]:
+def prepare_worksheet(ws) -> None:
+    has_headers = ws.cell(1, 4).value == "Rx Gross" and ws.cell(1, 10).value == "Variance"
+    if has_headers:
+        return
+
+    next_data_col = next((col for col in range(4, ws.max_column + 1) if ws.cell(1, col).value is not None), 4)
+    blank_slots = max(0, next_data_col - 4)
+    missing_slots = max(0, 7 - blank_slots)
+    if missing_slots:
+        ws.insert_cols(next_data_col, missing_slots)
+    write_headers(ws)
+    style_source_col = next_data_col + missing_slots
+    for col in range(4, 11):
+        ws.column_dimensions[ws.cell(1, col).column_letter].width = ws.column_dimensions[
+            ws.cell(1, style_source_col).column_letter
+        ].width
+        for row in range(1, ws.max_row + 1):
+            source = ws.cell(row, style_source_col)
+            target = ws.cell(row, col)
+            target._style = copy.copy(source._style)
+            if source.number_format:
+                target.number_format = source.number_format
+    for col in range(4, 11):
+        for row in range(2, ws.max_row + 1):
+            ws.cell(row, col).number_format = "#,##0.00"
+
+
+def add_columns_and_fill(workbook_path: Path, lookup: dict[str, OrderSnapshot], source_months: set[str], output_root: Path) -> tuple[list[Path], dict[str, list[int]], int]:
     wb = load_workbook(workbook_path)
     ws = wb["Sheet1"] if "Sheet1" in wb.sheetnames else wb[wb.sheetnames[0]]
-    has_headers = ws.cell(1, 4).value == "Rx Gross" and ws.cell(1, 10).value == "Variance"
-    if not has_headers:
-        next_data_col = next((col for col in range(4, ws.max_column + 1) if ws.cell(1, col).value is not None), 4)
-        blank_slots = max(0, next_data_col - 4)
-        missing_slots = max(0, 7 - blank_slots)
-        if missing_slots:
-            ws.insert_cols(next_data_col, missing_slots)
-        write_headers(ws)
-        style_source_col = next_data_col + missing_slots
+    prepare_worksheet(ws)
+    for row in range(2, ws.max_row + 1):
         for col in range(4, 11):
-            ws.column_dimensions[ws.cell(1, col).column_letter].width = ws.column_dimensions[
-                ws.cell(1, style_source_col).column_letter
-            ].width
-            for row in range(1, ws.max_row + 1):
-                source = ws.cell(row, style_source_col)
-                target = ws.cell(row, col)
-                target._style = copy.copy(source._style)
-                if source.number_format:
-                    target.number_format = source.number_format
-        for col in range(4, 11):
-            for row in range(2, ws.max_row + 1):
-                ws.cell(row, col).number_format = "#,##0.00"
-    else:
-        for row in range(2, ws.max_row + 1):
-            for col in range(4, 11):
-                ws.cell(row, col).value = None
+            ws.cell(row, col).value = None
 
     groups: dict[str, list[int]] = defaultdict(list)
     unmatched = 0
@@ -240,6 +276,8 @@ def add_columns_and_fill(workbook_path: Path, lookup: dict[str, OrderSnapshot], 
             continue
         month_label = normalize_month_label(ws.cell(row, 2).value)
         if not month_label:
+            continue
+        if source_months and month_label not in source_months:
             continue
         customer_key = normalize_customer_key(str(ws.cell(row, 1).value or ""))
         key = f"{month_label}|{customer_key}|{reference}"
@@ -257,17 +295,30 @@ def add_columns_and_fill(workbook_path: Path, lookup: dict[str, OrderSnapshot], 
         groups[month_label].append(row)
 
     output_root.mkdir(parents=True, exist_ok=True)
-    master_path = output_root / "RxOffice Accounting Issues - Enriched.xlsx"
-    wb.save(master_path)
-
-    output_files = [master_path]
+    output_files: list[Path] = []
     for month_label in sorted(groups, key=lambda label: datetime.strptime(label, "%B %Y")):
-        month_wb = load_workbook(master_path)
+        month_wb = load_workbook(workbook_path)
         month_ws = month_wb["Sheet1"] if "Sheet1" in month_wb.sheetnames else month_wb[month_wb.sheetnames[0]]
+        prepare_worksheet(month_ws)
         keep = set(groups[month_label])
         for row in range(month_ws.max_row, 1, -1):
             if row not in keep:
                 month_ws.delete_rows(row)
+            else:
+                reference = str(month_ws.cell(row, 3).value or "").strip()
+                if reference.endswith(".0"):
+                    reference = reference[:-2]
+                customer_key = normalize_customer_key(str(month_ws.cell(row, 1).value or ""))
+                key = f"{month_label}|{customer_key}|{reference}"
+                snapshot = lookup.get(key)
+                if snapshot is not None:
+                    month_ws.cell(row, 4).value = snapshot.rx_gross
+                    month_ws.cell(row, 5).value = snapshot.rx_discount
+                    month_ws.cell(row, 6).value = snapshot.rx_net
+                    month_ws.cell(row, 7).value = snapshot.ar_gross
+                    month_ws.cell(row, 8).value = snapshot.ar_discount
+                    month_ws.cell(row, 9).value = snapshot.ar_net
+                    month_ws.cell(row, 10).value = snapshot.variance
         month_path = output_root / f"RxOffice Accounting Issues - {month_label}.xlsx"
         month_wb.save(month_path)
         output_files.append(month_path)
@@ -281,8 +332,8 @@ def main() -> None:
     workbook_path = Path(sys.argv[2]) if len(sys.argv) > 2 else soa_root / "RxOffice Accounting Issues.xlsx"
     output_root = Path(sys.argv[3]) if len(sys.argv) > 3 else Path.cwd() / "outputs" / "accounting-issues-split"
 
-    lookup = build_source_lookup(soa_root)
-    output_files, groups, unmatched = add_columns_and_fill(workbook_path, lookup, output_root)
+    lookup, source_months = build_source_lookup(soa_root)
+    output_files, groups, unmatched = add_columns_and_fill(workbook_path, lookup, source_months, output_root)
 
     print(f"lookup_entries={len(lookup)}")
     print(f"months={len(groups)}")
