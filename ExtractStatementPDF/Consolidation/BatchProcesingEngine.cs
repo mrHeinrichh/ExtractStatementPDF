@@ -83,18 +83,12 @@ namespace ExtractStatementPDF.Consolidation
 
         private static string BuildLookupKey(string fullName)
         {
-            var name = Path.GetFileNameWithoutExtension(fullName).Trim();
-            name = Regex.Replace(name, @"_P\d+$", "", RegexOptions.IgnoreCase);
-            name = Regex.Replace(name, @"\s+\d{1,2}-\d{1,2}-\d{1,2},\s*\d{4}$", "", RegexOptions.IgnoreCase);
+            var name = Path.GetFileNameWithoutExtension(fullName);
+            var regex = new Regex(@"^([\w]+?)(?=_P\d+|$)");
+            var matches = regex.Match(name);
 
-            var underscoreParts = name.Split("_", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            var monthTokenIndex = Array.FindIndex(underscoreParts, IsMonthToken);
-            if (monthTokenIndex > 0)
-            {
-                name = string.Join("_", underscoreParts.Take(monthTokenIndex));
-            }
-
-            return Regex.Replace(name, @"[^A-Za-z0-9]+", "").ToLowerInvariant();
+            if (matches.Success) return matches.Groups[1].Value;
+            return "";
         }
 
         private static bool IsMonthToken(string value)
