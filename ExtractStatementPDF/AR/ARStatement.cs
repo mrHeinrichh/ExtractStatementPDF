@@ -4,9 +4,16 @@ namespace ExtractStatementPDF.AR
 {
     public class ARStatement
     {
+        public List<string> Filenames { get; set; } = [];
+
         public List<string> Pages { get; set; } = [];
 
         public List<AROrder> Orders { get; set; } = [];
+
+        public ARStatement(IEnumerable<string> filenames)
+        {
+            Filenames = Filenames;
+        }
 
         public void AddOrders(List<AROrder> orders)
         {

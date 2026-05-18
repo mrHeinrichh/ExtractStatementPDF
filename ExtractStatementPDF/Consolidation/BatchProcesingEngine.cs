@@ -13,10 +13,11 @@ namespace ExtractStatementPDF.Consolidation
         private ConsolidatedStatementExcel _excelGenerator = new ConsolidatedStatementExcel();
 
         public BatchProcesingEngine() { }
-
+       
         public void Process(string directory)
         {
             var directoryInfo = new DirectoryInfo(directory);
+            var archiveDirectory = Path.Combine(directoryInfo.FullName, "Archive");
 
             var arCopies = new List<FileInfo>();
             var csvs = new List<FileInfo>();
@@ -27,7 +28,6 @@ namespace ExtractStatementPDF.Consolidation
                 {
                     case ".pdf":
                     case ".xls":
-                    case ".xlsx":
                         arCopies.Add(file);
                         break;
                     case ".csv":
@@ -37,22 +37,48 @@ namespace ExtractStatementPDF.Consolidation
             }
 
             var matches = MatchFiles(arCopies, csvs);
-
-
             var statements = new List<ConsolidatedStatement>();
+
+            Directory.CreateDirectory(archiveDirectory);
+
             foreach (var match in matches)
             {
                 var statement = Reconciliate(match.Key, match.Value);
-                statements.Add(statement);
 
+                if (statement.IsValid())
+                {
+                    statements.Add(statement);
+                }
+                else
+                {
+                    ArchiveFiles(match.Key, match.Value, archiveDirectory);
+                }
+            }
+
+            foreach (var statement in statements)
+            {
                 var bytes = _excelGenerator.GenerateExcel(statement);
-
                 var filename = Path.GetFileNameWithoutExtension(statement.Filename) + ".xlsx";
                 using var filestream = new FileStream($"{directory}/{filename}", FileMode.CreateNew, FileAccess.Write);
                 filestream.Write(bytes);
             }
 
             Update(statements);
+        }
+
+        private static void ArchiveFiles(FileInfo csv, IEnumerable<FileInfo> arFiles, string archiveDirectory)
+        {
+            MoveToArchive(csv, archiveDirectory);
+            foreach (var file in arFiles)
+            {
+                MoveToArchive(file, archiveDirectory);
+            }
+        }
+
+        private static void MoveToArchive(FileInfo file, string archiveDirectory)
+        {
+            var dest = Path.Combine(archiveDirectory, file.Name);
+            file.MoveTo(dest, overwrite: true);
         }
 
         private static void Update(List<ConsolidatedStatement> s)
@@ -84,27 +110,17 @@ namespace ExtractStatementPDF.Consolidation
         private static string BuildLookupKey(string fullName)
         {
             var name = Path.GetFileNameWithoutExtension(fullName);
-            var regex = new Regex(@"^([\w]+?)(?=_P\d+|$)");
+            var regex = new Regex(@"^([\w&]+?)(?=_P\d+|$)");
             var matches = regex.Match(name);
 
             if (matches.Success) return matches.Groups[1].Value;
             return "";
         }
 
-        private static bool IsMonthToken(string value)
-        {
-            return value.Length == 6
-                && int.TryParse(value[..2], out var month)
-                && month >= 1
-                && month <= 12
-                && int.TryParse(value[2..], out _);
-        }
-
         private ConsolidatedStatement Reconciliate(FileInfo csv, IEnumerable<FileInfo> pdfs)
         {
             var arStatement = _arExtractor.Extract(pdfs.Select(t => t.FullName));
-
-            RxOfficeStatement rxOfficeStatement = _rxOfficeExtractor.Extract(csv.FullName);
+            var rxOfficeStatement = _rxOfficeExtractor.Extract(csv.FullName);
 
             var statement = new ConsolidatedStatement(arStatement, rxOfficeStatement);
 

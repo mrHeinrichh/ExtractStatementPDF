@@ -1,9 +1,8 @@
+using ExcelDataReader;
 using ExtractStatementPDF.Models;
 using OfficeOpenXml;
 using System.Diagnostics;
 using System.Globalization;
-using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace ExtractStatementPDF.AR
@@ -13,12 +12,13 @@ namespace ExtractStatementPDF.AR
         public ARExcelExtractor()
         {
             ExcelPackage.License.SetNonCommercialPersonal("Aaron del Rosario");
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
         }
 
         public ARStatement Extract(IEnumerable<string> filenames)
         {
-            var arStatement = new ARStatement();
-
+            var arStatement = new ARStatement(filenames);
+            
             foreach (var filename in filenames)
             {
                 var lines = GetWorksheetLines(filename);
@@ -39,24 +39,6 @@ namespace ExtractStatementPDF.AR
             return Extract([filename]);
         }
 
-        public List<string> ExtractReferences(IEnumerable<string> filenames)
-        {
-            var references = new List<string>();
-
-            foreach (var filename in filenames)
-            {
-                var lines = GetWorksheetLines(filename);
-                if (lines.Count == 0)
-                {
-                    continue;
-                }
-
-                references.AddRange(ParseReferences(lines));
-            }
-
-            return references;
-        }
-
         private List<AROrder> ParseLines(IEnumerable<string> lines)
         {
             var arOrders = new List<AROrder>();
@@ -73,21 +55,10 @@ namespace ExtractStatementPDF.AR
             return arOrders;
         }
 
-        private static IEnumerable<string> ParseReferences(IEnumerable<string> lines)
-        {
-            foreach (var line in lines)
-            {
-                var reference = ParseReference(line);
-                if (!string.IsNullOrWhiteSpace(reference))
-                {
-                    yield return reference;
-                }
-            }
-        }
-
+        
         private static AROrder? ParseLine(string line)
         {
-            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s+(\d+)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)";
+            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s+([A-Za-z\d]+)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)";
             var match = Regex.Match(line, pattern);
 
             if (!match.Success)
@@ -103,19 +74,6 @@ namespace ExtractStatementPDF.AR
                 Discount = decimal.Parse(match.Groups[4].Value, NumberStyles.Number, CultureInfo.InvariantCulture),
                 Net = decimal.Parse(match.Groups[5].Value, NumberStyles.Number, CultureInfo.InvariantCulture),
             };
-        }
-
-        private static string? ParseReference(string line)
-        {
-            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s+([A-Za-z0-9-]+)\s+";
-            var match = Regex.Match(line, pattern);
-
-            if (!match.Success)
-            {
-                return null;
-            }
-
-            return match.Groups[2].Value;
         }
 
         private List<string> GetWorksheetLines(string filename)
@@ -167,87 +125,37 @@ namespace ExtractStatementPDF.AR
 
         private static List<string> GetLegacyWorksheetLines(string filename)
         {
-            var commandText = BuildLegacyExcelReadCommand(filename);
-            var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(commandText));
-            var powershellPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.System),
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe");
+            using var stream = File.Open(filename, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = ExcelReaderFactory.CreateBinaryReader(stream);
 
-            using var process = new Process();
-            process.StartInfo.FileName = powershellPath;
-            process.StartInfo.Arguments = $"-NoProfile -NonInteractive -EncodedCommand {encodedCommand}";
-            process.StartInfo.UseShellExecute = false;
-            process.StartInfo.RedirectStandardOutput = true;
-            process.StartInfo.RedirectStandardError = true;
-            process.StartInfo.StandardOutputEncoding = Encoding.UTF8;
-            process.StartInfo.StandardErrorEncoding = Encoding.UTF8;
+            var lines = new List<string>();
 
-            process.Start();
-
-            var output = process.StandardOutput.ReadToEnd();
-            var error = process.StandardError.ReadToEnd();
-
-            process.WaitForExit();
-
-            if (process.ExitCode != 0)
+            while (reader.Read())
             {
-                Debug.WriteLine($"Error reading legacy excel: {filename}. {error}");
-                return [];
-            }
+                var values = Enumerable
+                    .Range(0, reader.FieldCount)
+                    .Select(i => reader.IsDBNull(i) ? null : GetCellText(reader, i))
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .ToList();
 
-            var lines = JsonSerializer.Deserialize<List<string>>(output.Trim());
-            return lines ?? [];
-        }
-
-        private static string BuildLegacyExcelReadCommand(string filename)
-        {
-            var escapedFilename = filename.Replace("'", "''");
-
-            return $$"""
-$path = '{{escapedFilename}}'
-Add-Type -AssemblyName System.Data
-$connectionString = "Provider=Microsoft.ACE.OLEDB.12.0;Data Source=$path;Extended Properties='Excel 8.0;HDR=NO;IMEX=1'"
-$connection = New-Object System.Data.OleDb.OleDbConnection($connectionString)
-try {
-    $connection.Open()
-    $schema = $connection.GetOleDbSchemaTable([System.Data.OleDb.OleDbSchemaGuid]::Tables, $null)
-    $sheet = @($schema.Rows | ForEach-Object { $_["TABLE_NAME"].ToString() } | Where-Object { $_ -match '\$' } | Select-Object -First 1)
-    if ($sheet.Count -eq 0) {
-        @() | ConvertTo-Json -Compress
-        exit 0
-    }
-
-    $command = $connection.CreateCommand()
-    $command.CommandText = "SELECT * FROM [$($sheet[0])]"
-    $adapter = New-Object System.Data.OleDb.OleDbDataAdapter($command)
-    $table = New-Object System.Data.DataTable
-    [void]$adapter.Fill($table)
-
-    $lines = foreach ($row in $table.Rows) {
-        $values = foreach ($value in $row.ItemArray) {
-            if ($null -ne $value) {
-                $text = $value.ToString().Trim()
-                if ($text.Length -gt 0) {
-                    $text
+                if (values.Count > 0)
+                {
+                    lines.Add(string.Join(" ", values));
                 }
             }
+
+            return lines;
         }
 
-        if ($values) {
-            $values -join ' '
-        }
-    }
-
-    @($lines) | ConvertTo-Json -Compress
-}
-finally {
-    if ($connection.State -eq 'Open') {
-        $connection.Close()
-    }
-}
-""";
+        private static string? GetCellText(IExcelDataReader reader, int columnIndex)
+        {
+            var value = reader.GetValue(columnIndex);
+            return value switch
+            {
+                DateTime dt => dt.ToString("dd-MMM-yy", CultureInfo.InvariantCulture),
+                double d => d.ToString(CultureInfo.InvariantCulture),
+                _ => value?.ToString()?.Trim(),
+            };
         }
     }
 }

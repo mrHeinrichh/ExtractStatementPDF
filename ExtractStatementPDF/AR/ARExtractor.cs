@@ -39,7 +39,7 @@ namespace ExtractStatementPDF.AR
                 return _excelExtractor.Extract(excelFiles);
             }
 
-            return new ARStatement();
+            return new ARStatement([]);
         }
 
         public ARStatement Extract(string filename)

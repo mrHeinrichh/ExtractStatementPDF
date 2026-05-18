@@ -12,7 +12,7 @@ namespace ExtractStatementPDF.AR
     {
         public ARStatement Extract(IEnumerable<string> filenames)
         {
-            var arStatement = new ARStatement();
+            var arStatement = new ARStatement(filenames);
 
             foreach (var filename in filenames)
             {
@@ -35,22 +35,6 @@ namespace ExtractStatementPDF.AR
             return Extract([filename]);
         }
 
-        public List<string> ExtractReferences(IEnumerable<string> filenames)
-        {
-            var references = new List<string>();
-
-            foreach (var filename in filenames)
-            {
-                var pages = GetPageContents(filename);
-                foreach (var page in pages)
-                {
-                    references.AddRange(ParseReferences(page));
-                }
-            }
-
-            return references;
-        }
-
         private List<AROrder> ParsePage(string pageContent)
         {
             using var reader = new StringReader(pageContent);
@@ -67,24 +51,9 @@ namespace ExtractStatementPDF.AR
             return arOrders;
         }
 
-        private IEnumerable<string> ParseReferences(string pageContent)
-        {
-            using var reader = new StringReader(pageContent);
-
-            string? line;
-            while ((line = reader.ReadLine()) != null)
-            {
-                var reference = ParseReference(line);
-                if (!string.IsNullOrWhiteSpace(reference))
-                {
-                    yield return reference;
-                }
-            }
-        }
-
         private AROrder? ParseLine(string line)
         {
-            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s(\d+)\s([\d,.]+)\s([\d,.]+)\s([\d,.]+)";
+            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s([A-Za-z\d]+)\s([\d,.]+)\s([\d,.]+)\s([\d,.]+)";
 
             var match = Regex.Match(line, pattern);
 
@@ -103,19 +72,6 @@ namespace ExtractStatementPDF.AR
             }
 
             return null;
-        }
-
-        private static string? ParseReference(string line)
-        {
-            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s([A-Za-z0-9-]+)\s";
-            var match = Regex.Match(line, pattern);
-
-            if (!match.Success)
-            {
-                return null;
-            }
-
-            return match.Groups[2].Value;
         }
 
         private List<string> GetPageContents(string filename)
