@@ -39,6 +39,24 @@ namespace ExtractStatementPDF.AR
             return Extract([filename]);
         }
 
+        public List<string> ExtractReferences(IEnumerable<string> filenames)
+        {
+            var references = new List<string>();
+
+            foreach (var filename in filenames)
+            {
+                var lines = GetWorksheetLines(filename);
+                if (lines.Count == 0)
+                {
+                    continue;
+                }
+
+                references.AddRange(ParseReferences(lines));
+            }
+
+            return references;
+        }
+
         private List<AROrder> ParseLines(IEnumerable<string> lines)
         {
             var arOrders = new List<AROrder>();
@@ -53,6 +71,18 @@ namespace ExtractStatementPDF.AR
             }
 
             return arOrders;
+        }
+
+        private static IEnumerable<string> ParseReferences(IEnumerable<string> lines)
+        {
+            foreach (var line in lines)
+            {
+                var reference = ParseReference(line);
+                if (!string.IsNullOrWhiteSpace(reference))
+                {
+                    yield return reference;
+                }
+            }
         }
 
         private static AROrder? ParseLine(string line)
@@ -73,6 +103,19 @@ namespace ExtractStatementPDF.AR
                 Discount = decimal.Parse(match.Groups[4].Value, NumberStyles.Number, CultureInfo.InvariantCulture),
                 Net = decimal.Parse(match.Groups[5].Value, NumberStyles.Number, CultureInfo.InvariantCulture),
             };
+        }
+
+        private static string? ParseReference(string line)
+        {
+            var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s+([A-Za-z0-9-]+)\s+";
+            var match = Regex.Match(line, pattern);
+
+            if (!match.Success)
+            {
+                return null;
+            }
+
+            return match.Groups[2].Value;
         }
 
         private List<string> GetWorksheetLines(string filename)

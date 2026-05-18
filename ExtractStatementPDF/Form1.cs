@@ -119,5 +119,18 @@ namespace ExtractStatementPDF
 
             return directory;
         }
+
+        private void button5_Click(object sender, EventArgs e)
+        {
+            var engine = new SanitizeEngine();
+
+            var directory = SelectDirectory();
+
+            if (directory == string.Empty) return;
+
+            var result = engine.Process(directory);
+            using var dialog = new SanitizeResultDialog(result);
+            dialog.ShowDialog(this);
+        }
     }
 }
