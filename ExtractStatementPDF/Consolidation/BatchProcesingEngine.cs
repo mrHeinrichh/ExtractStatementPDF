@@ -31,12 +31,15 @@ namespace ExtractStatementPDF.Consolidation
                 }
             }
 
-            var archiveDirectory = Path.Combine(directoryInfo.FullName, "Invalid");
+            var archiveDirectory = Path.Combine(directoryInfo.FullName, "04-Archived");
             Directory.CreateDirectory(archiveDirectory);
 
             var invalidStatements = new List<ARStatement>();
+              var verifiedDirectory = Path.Combine(directoryInfo.FullName, "02-Verified");
+                Directory.CreateDirectory(archiveDirectory);
             foreach (var file in arCopies)
             {
+              
                 var statement = _arExtractor.Extract(file.FullName);
 
                 if (!statement.IsValid())
@@ -44,6 +47,11 @@ namespace ExtractStatementPDF.Consolidation
                     invalidStatements.Add(statement);
 
                     InvalidFiles([file], archiveDirectory);
+                }
+                else
+                {
+                    VerifiedFiles([file], verifiedDirectory);
+
                 }
             }
         }
@@ -75,6 +83,7 @@ namespace ExtractStatementPDF.Consolidation
             var statements = new List<ConsolidatedStatement>();
 
             Directory.CreateDirectory(archiveDirectory);
+            Directory.CreateDirectory(processedDirectory);
 
             foreach (var match in matches)
             {
@@ -83,7 +92,7 @@ namespace ExtractStatementPDF.Consolidation
                 if (statement.IsValid())
                 {
                     statements.Add(statement);
-                    ArchiveFiles(match.Key, match.Value, processedDirectory);
+                    ProcessedFiles(match.Key, match.Value, processedDirectory);
                 }
                 else
                 {
@@ -103,6 +112,14 @@ namespace ExtractStatementPDF.Consolidation
         }
 
         private static void InvalidFiles(IEnumerable<FileInfo> arFiles, string archiveDirectory)
+        {
+            foreach (var file in arFiles)
+            {
+                MoveToArchive(file, archiveDirectory);
+            }
+        }
+
+        private static void VerifiedFiles(IEnumerable<FileInfo> arFiles, string archiveDirectory)
         {
             foreach (var file in arFiles)
             {

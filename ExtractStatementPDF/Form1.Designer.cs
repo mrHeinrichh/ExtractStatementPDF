@@ -114,7 +114,7 @@
             button5.Name = "button5";
             button5.Size = new Size(123, 23);
             button5.TabIndex = 8;
-            button5.Text = "Verify CSVs";
+            button5.Text = "Verify AR Data";
             button5.UseVisualStyleBackColor = true;
             button5.Click += button5_Click;
             // 
