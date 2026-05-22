@@ -36,6 +36,7 @@
             textBox3 = new TextBox();
             button3 = new Button();
             button4 = new Button();
+            button5 = new Button();
             SuspendLayout();
             // 
             // button1
@@ -103,15 +104,26 @@
             button4.Name = "button4";
             button4.Size = new Size(123, 23);
             button4.TabIndex = 7;
-            button4.Text = "Scan Folder";
+            button4.Text = "Audit SOA";
             button4.UseVisualStyleBackColor = true;
             button4.Click += button4_Click;
+            // 
+            // button5
+            // 
+            button5.Location = new Point(12, 148);
+            button5.Name = "button5";
+            button5.Size = new Size(123, 23);
+            button5.TabIndex = 8;
+            button5.Text = "Verify CSVs";
+            button5.UseVisualStyleBackColor = true;
+            button5.Click += button5_Click;
             // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(944, 530);
+            Controls.Add(button5);
             Controls.Add(button4);
             Controls.Add(button3);
             Controls.Add(textBox3);
@@ -136,5 +148,6 @@
         private TextBox textBox3;
         private Button button3;
         private Button button4;
+        private Button button5;
     }
 }

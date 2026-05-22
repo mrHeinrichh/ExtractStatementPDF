@@ -14,15 +14,50 @@ namespace ExtractStatementPDF.Consolidation
 
         public BatchProcesingEngine() { }
        
+        public void Verify(string directory)
+        {
+            var directoryInfo = new DirectoryInfo(directory);
+            var arCopies = new List<FileInfo>();
+            var csvs = new List<FileInfo>();
+
+            foreach (var file in directoryInfo.GetFiles("01-Verification/*", SearchOption.AllDirectories))
+            {
+                switch (file.Extension.ToLowerInvariant())
+                {
+                    case ".pdf":
+                    case ".xls":
+                        arCopies.Add(file);
+                        break;
+                }
+            }
+
+            var archiveDirectory = Path.Combine(directoryInfo.FullName, "Invalid");
+            Directory.CreateDirectory(archiveDirectory);
+
+            var invalidStatements = new List<ARStatement>();
+            foreach (var file in arCopies)
+            {
+                var statement = _arExtractor.Extract(file.FullName);
+
+                if (!statement.IsValid())
+                {
+                    invalidStatements.Add(statement);
+
+                    InvalidFiles([file], archiveDirectory);
+                }
+            }
+        }
+
         public void Process(string directory)
         {
             var directoryInfo = new DirectoryInfo(directory);
-            var archiveDirectory = Path.Combine(directoryInfo.FullName, "Archive");
+            var archiveDirectory = Path.Combine(directoryInfo.FullName, "04-Archived");
+            var processedDirectory = Path.Combine(directoryInfo.FullName, "03-Processed");
 
             var arCopies = new List<FileInfo>();
             var csvs = new List<FileInfo>();
 
-            foreach (var file in directoryInfo.GetFiles("*", SearchOption.AllDirectories))
+            foreach (var file in directoryInfo.GetFiles("02-Matches/*", SearchOption.AllDirectories))
             {
                 switch (file.Extension.ToLowerInvariant())
                 {
@@ -48,6 +83,7 @@ namespace ExtractStatementPDF.Consolidation
                 if (statement.IsValid())
                 {
                     statements.Add(statement);
+                    ArchiveFiles(match.Key, match.Value, processedDirectory);
                 }
                 else
                 {
@@ -64,6 +100,23 @@ namespace ExtractStatementPDF.Consolidation
             }
 
             Update(statements);
+        }
+
+        private static void InvalidFiles(IEnumerable<FileInfo> arFiles, string archiveDirectory)
+        {
+            foreach (var file in arFiles)
+            {
+                MoveToArchive(file, archiveDirectory);
+            }
+        }
+
+        private static void ProcessedFiles(FileInfo csv, IEnumerable<FileInfo> arFiles, string archiveDirectory)
+        {
+            MoveToArchive(csv, archiveDirectory);
+            foreach (var file in arFiles)
+            {
+                MoveToArchive(file, archiveDirectory);
+            }
         }
 
         private static void ArchiveFiles(FileInfo csv, IEnumerable<FileInfo> arFiles, string archiveDirectory)

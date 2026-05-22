@@ -73,10 +73,19 @@ namespace ExtractStatementPDF
             var engine = new BatchProcesingEngine();
 
             var directory = SelectDirectory();
-
             if (directory == string.Empty) return;
 
             engine.Process(directory);
+        }
+
+        private void button5_Click(object sender, EventArgs e)
+        {
+            var engine = new BatchProcesingEngine();
+
+            var directory = SelectDirectory();
+            if (directory == string.Empty) return;
+
+            engine.Verify(directory);
         }
 
         private static string SelectCSV()

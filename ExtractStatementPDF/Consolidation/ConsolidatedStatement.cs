@@ -51,12 +51,7 @@ namespace ExtractStatementPDF.Consolidation
 
         public bool IsValid()
         {
-            var totalOrders = ARStatement.Orders.Count;
-            var manualOrders = ARStatement.Orders.Where(t => Regex.IsMatch(t.Reference, "[A-Za-z]")).Count();
-
-            var percentage = (double)manualOrders / totalOrders;
-
-            return percentage < 0.5;
+            return ARStatement.IsValid();
         }
 
         private void ParseFilename(string fileName)
