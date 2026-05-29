@@ -20,7 +20,7 @@ namespace ExtractStatementPDF.Consolidation
             var arCopies = new List<FileInfo>();
             var csvs = new List<FileInfo>();
 
-            foreach (var file in directoryInfo.GetFiles("01-Verification/*", SearchOption.AllDirectories))
+            foreach (var file in directoryInfo.GetFiles($"{Subdirectories.Verification}/*", SearchOption.AllDirectories))
             {
                 switch (file.Extension.ToLowerInvariant())
                 {
@@ -31,12 +31,11 @@ namespace ExtractStatementPDF.Consolidation
                 }
             }
 
-            var archiveDirectory = Path.Combine(directoryInfo.FullName, "04-Archived");
-            Directory.CreateDirectory(archiveDirectory);
+            var archiveDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Archived);
+            var verifiedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Verified);
 
             var invalidStatements = new List<ARStatement>();
-              var verifiedDirectory = Path.Combine(directoryInfo.FullName, "02-Verified");
-                Directory.CreateDirectory(archiveDirectory);
+
             foreach (var file in arCopies)
             {
               
@@ -46,11 +45,11 @@ namespace ExtractStatementPDF.Consolidation
                 {
                     invalidStatements.Add(statement);
 
-                    InvalidFiles([file], archiveDirectory);
+                    MoveFilesTo(null, [file], archiveDirectory);
                 }
                 else
                 {
-                    VerifiedFiles([file], verifiedDirectory);
+                    MoveFilesTo(null, [file], verifiedDirectory);
 
                 }
             }
@@ -59,13 +58,14 @@ namespace ExtractStatementPDF.Consolidation
         public void Process(string directory)
         {
             var directoryInfo = new DirectoryInfo(directory);
-            var archiveDirectory = Path.Combine(directoryInfo.FullName, "04-Archived");
-            var processedDirectory = Path.Combine(directoryInfo.FullName, "03-Processed");
+
+            var archivedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Archived);
+            var processedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Processed);
 
             var arCopies = new List<FileInfo>();
             var csvs = new List<FileInfo>();
 
-            foreach (var file in directoryInfo.GetFiles("02-Matches/*", SearchOption.AllDirectories))
+            foreach (var file in directoryInfo.GetFiles($"{Subdirectories.Matched}/*", SearchOption.AllDirectories))
             {
                 switch (file.Extension.ToLowerInvariant())
                 {
@@ -82,9 +82,6 @@ namespace ExtractStatementPDF.Consolidation
             var matches = MatchFiles(arCopies, csvs);
             var statements = new List<ConsolidatedStatement>();
 
-            Directory.CreateDirectory(archiveDirectory);
-            Directory.CreateDirectory(processedDirectory);
-
             foreach (var match in matches)
             {
                 var statement = Reconciliate(match.Key, match.Value);
@@ -92,11 +89,11 @@ namespace ExtractStatementPDF.Consolidation
                 if (statement.IsValid())
                 {
                     statements.Add(statement);
-                    ProcessedFiles(match.Key, match.Value, processedDirectory);
+                    MoveFilesTo(match.Key, match.Value, processedDirectory);
                 }
                 else
                 {
-                    ArchiveFiles(match.Key, match.Value, archiveDirectory);
+                    MoveFilesTo(match.Key, match.Value, archivedDirectory);
                 }
             }
 
@@ -111,43 +108,28 @@ namespace ExtractStatementPDF.Consolidation
             Update(statements);
         }
 
-        private static void InvalidFiles(IEnumerable<FileInfo> arFiles, string archiveDirectory)
+        private static string EnsureDirectoryExists(string rootDirectory, string subdirectory)
         {
+            var directory = Path.Combine(rootDirectory, subdirectory);
+            Directory.CreateDirectory(directory);
+
+            return directory;
+        }
+
+        private static void MoveFilesTo(FileInfo? csv, IEnumerable<FileInfo> arFiles, string directory)
+        {
+            if (csv is not null)
+                MoveToDirectory(csv, directory);
+
             foreach (var file in arFiles)
             {
-                MoveToArchive(file, archiveDirectory);
+                MoveToDirectory(file, directory);
             }
         }
 
-        private static void VerifiedFiles(IEnumerable<FileInfo> arFiles, string archiveDirectory)
+        private static void MoveToDirectory(FileInfo file, string directory)
         {
-            foreach (var file in arFiles)
-            {
-                MoveToArchive(file, archiveDirectory);
-            }
-        }
-
-        private static void ProcessedFiles(FileInfo csv, IEnumerable<FileInfo> arFiles, string archiveDirectory)
-        {
-            MoveToArchive(csv, archiveDirectory);
-            foreach (var file in arFiles)
-            {
-                MoveToArchive(file, archiveDirectory);
-            }
-        }
-
-        private static void ArchiveFiles(FileInfo csv, IEnumerable<FileInfo> arFiles, string archiveDirectory)
-        {
-            MoveToArchive(csv, archiveDirectory);
-            foreach (var file in arFiles)
-            {
-                MoveToArchive(file, archiveDirectory);
-            }
-        }
-
-        private static void MoveToArchive(FileInfo file, string archiveDirectory)
-        {
-            var dest = Path.Combine(archiveDirectory, file.Name);
+            var dest = Path.Combine(directory, file.Name);
             file.MoveTo(dest, overwrite: true);
         }
 
