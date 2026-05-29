@@ -55,6 +55,39 @@ namespace ExtractStatementPDF.Consolidation
             }
         }
 
+        public void VerifyMatches(string directory)
+        {
+            var directoryInfo = new DirectoryInfo(directory);
+            var matchedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Matched);
+
+            var arCopies = new List<FileInfo>();
+            var csvs = new List<FileInfo>();
+
+            foreach (var file in directoryInfo.GetFiles($"{Subdirectories.Verified}/*", SearchOption.AllDirectories))
+            {
+                switch (file.Extension.ToLowerInvariant())
+                {
+                    case ".pdf":
+                    case ".xls":
+                        arCopies.Add(file);
+                        break;
+                    case ".csv":
+                        csvs.Add(file);
+                        break;
+                }
+            }
+
+            var matches = MatchFiles(arCopies, csvs);
+
+            foreach (var match in matches)
+            {
+                if (match.Value.Count() > 0)
+                {
+                    MoveFilesTo(match.Key, match.Value, matchedDirectory);
+                }
+            }
+        }
+
         public void Process(string directory)
         {
             var directoryInfo = new DirectoryInfo(directory);

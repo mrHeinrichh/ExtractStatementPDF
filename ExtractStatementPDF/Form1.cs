@@ -88,6 +88,16 @@ namespace ExtractStatementPDF
             engine.Verify(directory);
         }
 
+        private void button6_Click(object sender, EventArgs e)
+        {
+            var engine = new BatchProcesingEngine();
+
+            var directory = SelectDirectory();
+            if (directory == string.Empty) return;
+
+            engine.VerifyMatches(directory);
+        }
+
         private static string SelectCSV()
         {
             return SelectFile("CSV files (*.csv)|*.csv|All files (*.*)|*.*");

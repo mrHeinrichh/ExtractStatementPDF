@@ -37,6 +37,7 @@
             button3 = new Button();
             button4 = new Button();
             button5 = new Button();
+            button6 = new Button();
             SuspendLayout();
             // 
             // button1
@@ -100,7 +101,7 @@
             // 
             // button4
             // 
-            button4.Location = new Point(12, 177);
+            button4.Location = new Point(12, 227);
             button4.Name = "button4";
             button4.Size = new Size(123, 23);
             button4.TabIndex = 7;
@@ -118,11 +119,22 @@
             button5.UseVisualStyleBackColor = true;
             button5.Click += button5_Click;
             // 
+            // button6
+            // 
+            button6.Location = new Point(12, 177);
+            button6.Name = "button6";
+            button6.Size = new Size(123, 23);
+            button6.TabIndex = 9;
+            button6.Text = "Verify Matches";
+            button6.UseVisualStyleBackColor = true;
+            button6.Click += button6_Click;
+            // 
             // Form1
             // 
             AutoScaleDimensions = new SizeF(7F, 15F);
             AutoScaleMode = AutoScaleMode.Font;
             ClientSize = new Size(944, 530);
+            Controls.Add(button6);
             Controls.Add(button5);
             Controls.Add(button4);
             Controls.Add(button3);
@@ -149,5 +161,6 @@
         private Button button3;
         private Button button4;
         private Button button5;
+        private Button button6;
     }
 }
