@@ -22,7 +22,10 @@ namespace ExtractStatementPDF.RxOffice
 
         public RxOfficeStatement Extract(IEnumerable<string> fullpaths)
         {
+            if (!fullpaths.Any()) return new RxOfficeStatement("");
+
             var filename = Path.GetFileName(fullpaths.First());
+
             var statement = new RxOfficeStatement(filename);
 
             foreach (var fullpath in fullpaths)

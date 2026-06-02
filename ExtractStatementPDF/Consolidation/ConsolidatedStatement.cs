@@ -12,7 +12,7 @@ namespace ExtractStatementPDF.Consolidation
 
         public List<ConsolidatedOrder> ConsolidatedOrders { get; private set; }
 
-        public string Filename => RxOfficeStatement.Filename;
+        public string Filename { get; private set; }
 
         public string Customer { get; private set; }
 
@@ -21,13 +21,15 @@ namespace ExtractStatementPDF.Consolidation
         public string Period { get; private set; }
 
         public ConsolidatedStatement(
+            string name,
             ARStatement arStatement,
             RxOfficeStatement rxOfficeStatement)
         {
             ARStatement = arStatement;
             RxOfficeStatement = rxOfficeStatement;
 
-            ParseFilename(RxOfficeStatement.Filename);
+            Filename = name;
+            ParseFilename(name);
 
             var arOrders = arStatement.Orders;
             var rxOfficeOrders = rxOfficeStatement.Orders;

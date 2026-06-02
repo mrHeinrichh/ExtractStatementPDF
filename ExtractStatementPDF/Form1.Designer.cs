@@ -29,7 +29,7 @@
         private void InitializeComponent()
         {
             button1 = new Button();
-            richTextBox1 = new RichTextBox();
+            txtUpdate = new RichTextBox();
             button2 = new Button();
             txtARStatement = new TextBox();
             txtRxOffice = new TextBox();
@@ -50,13 +50,13 @@
             button1.UseVisualStyleBackColor = true;
             button1.Click += button1_Click;
             // 
-            // richTextBox1
+            // txtUpdate
             // 
-            richTextBox1.Location = new Point(356, 203);
-            richTextBox1.Name = "richTextBox1";
-            richTextBox1.Size = new Size(576, 315);
-            richTextBox1.TabIndex = 1;
-            richTextBox1.Text = "";
+            txtUpdate.Location = new Point(356, 203);
+            txtUpdate.Name = "txtUpdate";
+            txtUpdate.Size = new Size(576, 315);
+            txtUpdate.TabIndex = 1;
+            txtUpdate.Text = "";
             // 
             // button2
             // 
@@ -142,7 +142,7 @@
             Controls.Add(txtRxOffice);
             Controls.Add(txtARStatement);
             Controls.Add(button2);
-            Controls.Add(richTextBox1);
+            Controls.Add(txtUpdate);
             Controls.Add(button1);
             Name = "Form1";
             Text = "Form1";
@@ -153,7 +153,7 @@
         #endregion
 
         private Button button1;
-        private RichTextBox richTextBox1;
+        private RichTextBox txtUpdate;
         private Button button2;
         private TextBox txtARStatement;
         private TextBox txtRxOffice;

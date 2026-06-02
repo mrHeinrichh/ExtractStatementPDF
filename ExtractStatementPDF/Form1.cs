@@ -23,7 +23,7 @@ namespace ExtractStatementPDF
             var extractor = new ARExtractor();
             arStatement = extractor.Extract(fullpath);
 
-            richTextBox1.Text = string.Join(Environment.NewLine, arStatement.Pages);
+            txtUpdate.Text = string.Join(Environment.NewLine, arStatement.Pages);
         }
 
         private void button2_Click(object sender, EventArgs e)
@@ -42,7 +42,7 @@ namespace ExtractStatementPDF
                 if (arStatement == null) return;
                 if (rxOfficeStatement == null) return;
 
-                var statement = new ConsolidatedStatement(arStatement, rxOfficeStatement);
+                var statement = new ConsolidatedStatement("", arStatement, rxOfficeStatement);
 
                 var excel = new ConsolidatedStatementExcel();
                 var bytes = excel.GenerateExcel(statement);
@@ -68,24 +68,52 @@ namespace ExtractStatementPDF
             }
         }
 
-        private void button4_Click(object sender, EventArgs e)
+        private async void button4_Click(object sender, EventArgs e)
         {
-            var engine = new BatchProcesingEngine();
+            try
+            {
+                var engine = new BatchProcesingEngine();
 
-            var directory = SelectDirectory();
-            if (directory == string.Empty) return;
+                var directory = SelectDirectory();
+                if (directory == string.Empty) return;
 
-            engine.Process(directory);
+                txtUpdate.AppendText("Processing started...");
+
+                await Task.Run(() =>
+                {
+                    engine.Process(directory);
+                });
+
+                txtUpdate.AppendText("Processing complete.");
+            }
+            catch
+            {
+                txtUpdate.AppendText("Processing aborted due to error.");
+            }
         }
 
-        private void button5_Click(object sender, EventArgs e)
+        private async void button5_Click(object sender, EventArgs e)
         {
-            var engine = new BatchProcesingEngine();
+            try
+            {
+                var engine = new BatchProcesingEngine();
 
-            var directory = SelectDirectory();
-            if (directory == string.Empty) return;
+                var directory = SelectDirectory();
+                if (directory == string.Empty) return;
 
-            engine.Verify(directory);
+                txtUpdate.AppendText("Verifying started...");
+
+                await Task.Run(() =>
+                {
+                    engine.Verify(directory);
+                });
+
+                txtUpdate.AppendText("Verifying complete.");
+            }
+            catch
+            {
+                txtUpdate.AppendText("Verifying aborted due to error.");
+            }
         }
 
         private void button6_Click(object sender, EventArgs e)

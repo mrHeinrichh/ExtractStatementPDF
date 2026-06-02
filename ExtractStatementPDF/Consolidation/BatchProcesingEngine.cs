@@ -184,7 +184,9 @@ namespace ExtractStatementPDF.Consolidation
 
         private static IEnumerable<FileMatchResult> MatchFiles(List<FileInfo> arCopies, List<FileInfo> csvs)
         {
-            var lookupKeys = csvs.Select(t => BuildLookupKey(t.FullName)).Distinct();
+            var filenames = new List<FileInfo>().Concat(arCopies).Concat(csvs);
+            var lookupKeys = filenames.Select(t => BuildLookupKey(t.FullName)).Distinct();
+            
             var matches = new List<FileMatchResult>();
 
             foreach (var lookupKey in lookupKeys)
@@ -218,7 +220,7 @@ namespace ExtractStatementPDF.Consolidation
             var arStatement = _arExtractor.Extract(fileMatchResult.ArFiles.Select(t => t.FullName));
             var rxOfficeStatement = _rxOfficeExtractor.Extract(fileMatchResult.CsvFiles.Select(t => t.FullName));
 
-            var statement = new ConsolidatedStatement(arStatement, rxOfficeStatement);
+            var statement = new ConsolidatedStatement(fileMatchResult.Name, arStatement, rxOfficeStatement);
 
             return statement;
         }
