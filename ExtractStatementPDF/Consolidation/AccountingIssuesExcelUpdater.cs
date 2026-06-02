@@ -7,13 +7,12 @@ namespace ExtractStatementPDF.Consolidation
 {
     public class AccountingIssuesExcelUpdater
     {
-        private const string WorkbookFileName = "RxOffice Accounting Issues.xlsx";
+        private const string WorkbookFileName = "RxOffice Accounting Issues";
 
         private const string GoogleSheetShortcutFileName = "RxOffice Accounting Issues.gsheet";
 
         private const string WorkbookDirectory = @"G:\.shortcut-targets-by-id\1VLaMf4DXM2APBuWDeKAJW_sNUkXgk7tk\Plastilens\05 - Testing\SOA";
 
-        private const string WorksheetName = "Sheet1";
 
         public AccountingIssuesExcelUpdater()
         {
@@ -22,16 +21,22 @@ namespace ExtractStatementPDF.Consolidation
 
         public void Update(IEnumerable<ConsolidatedStatement> statements)
         {
-            var workbookPath = ResolveWorkbookPath();
+            var workbookPath = ResolveWorkbookPath(statements);
 
-            var rowsAdded = 0;
             var lastRow = 0;
 
             using (var package = new ExcelPackage(new FileInfo(workbookPath)))
             {
-                var ws = package.Workbook.Worksheets[WorksheetName] ?? package.Workbook.Worksheets.First();
+                var ws = package.Workbook.Worksheets.FirstOrDefault()
+                    ?? package.Workbook.Worksheets.Add("Issues");
+
                 var existingKeys = GetExistingKeys(ws);
                 var nextRow = GetNextRow(ws);
+
+                if (ws.Dimension == null)
+                {
+                    WriteHeaders(ws, 1);
+                }
 
                 foreach (var statement in statements)
                 {
@@ -47,13 +52,7 @@ namespace ExtractStatementPDF.Consolidation
                         WriteRow(ws, nextRow, statement, issue);
 
                         nextRow++;
-                        rowsAdded++;
                     }
-                }
-
-                if (rowsAdded == 0)
-                {
-                    return;
                 }
 
                 lastRow = nextRow - 1;
@@ -75,6 +74,34 @@ namespace ExtractStatementPDF.Consolidation
             ws.Row(row).Hidden = false;
         }
 
+        private static void WriteHeaders(
+            ExcelWorksheet ws,
+            int row)
+        {
+            ws.Cells[row, 1].Value = "Optical Name";
+            ws.Cells[row, 2].Value = "SOA";
+            ws.Cells[row, 3].Value = "Reference No";
+
+            ws.Cells[row, 4].Value = "Rx Gross";
+            ws.Cells[row, 5].Value = "Rx Discount";
+            ws.Cells[row, 6].Value = "Rx NET";
+            ws.Cells[row, 7].Value = "AR Gross";
+            ws.Cells[row, 8].Value = "AR Discount";
+            ws.Cells[row, 9].Value = "AR NET";
+            ws.Cells[row, 10].Value = "Variance";
+
+            ws.Cells[row, 11].Value = "Issue Type";
+            ws.Cells[row, 12].Value = "Date Filed";
+            ws.Cells[row, 13].Value = "Assigned";
+            ws.Cells[row, 14].Value = "Investigated";
+            ws.Cells[row, 15].Value = "Comments";
+            ws.Cells[row, 16].Value = "Reason";
+            ws.Cells[row, 17].Value = "Level of Concern";
+            ws.Cells[row, 18].Value = "Responsible";
+            ws.Cells[row, 19].Value = "Action";
+            ws.Cells[row, 20].Value = "Action Resolved";
+        }
+
         private static void WriteRow(
             ExcelWorksheet ws,
             int row,
@@ -84,16 +111,25 @@ namespace ExtractStatementPDF.Consolidation
             ws.Cells[row, 1].Value = NormalizeName(statement.Customer);
             ws.Cells[row, 2].Value = ParseSoaText(statement.Month);
             ws.Cells[row, 3].Value = issue.Reference;
-            ws.Cells[row, 4].Value = issue.Remarks;
-            ws.Cells[row, 5].Value = DateTime.Today;
-            ws.Cells[row, 6].Value = string.Empty;
-            ws.Cells[row, 7].Value = false;
-            ws.Cells[row, 8].Value = string.Empty;
-            ws.Cells[row, 9].Value = string.Empty;
-            ws.Cells[row, 10].Value = string.Empty;
-            ws.Cells[row, 11].Value = string.Empty;
-            ws.Cells[row, 12].Value = string.Empty;
+
+            ws.Cells[row, 4].Value = issue.RxOfficeOrder?.Gross;
+            ws.Cells[row, 5].Value = issue.RxOfficeOrder?.Discount;
+            ws.Cells[row, 6].Value = issue.RxOfficeOrder?.Net;
+            ws.Cells[row, 7].Value = issue.AROrder?.Gross;
+            ws.Cells[row, 8].Value = issue.AROrder?.Discount;
+            ws.Cells[row, 9].Value = issue.AROrder?.Net;
+            ws.Cells[row, 10].Value = issue.Variance;
+
+            ws.Cells[row, 11].Value = issue.Remarks;
+            ws.Cells[row, 12].Value = DateTime.Today;
             ws.Cells[row, 13].Value = string.Empty;
+            ws.Cells[row, 14].Value = false;
+            ws.Cells[row, 15].Value = string.Empty;
+            ws.Cells[row, 16].Value = string.Empty;
+            ws.Cells[row, 17].Value = string.Empty;
+            ws.Cells[row, 18].Value = string.Empty;
+            ws.Cells[row, 19].Value = string.Empty;
+            ws.Cells[row, 20].Value = false;
         }
 
         private static string BuildKey(ConsolidatedStatement statement, ConsolidatedOrder issue)
@@ -151,25 +187,30 @@ namespace ExtractStatementPDF.Consolidation
             return input;
         }
 
-        private static string ResolveWorkbookPath()
+        private static string ResolveWorkbookPath(IEnumerable<ConsolidatedStatement> statements)
         {
-            var workbookPath = Path.Combine(WorkbookDirectory, WorkbookFileName);
-            if (File.Exists(workbookPath))
-            {
-                return workbookPath;
-            }
+            var statement = statements.First();
+            var filename = $"{WorkbookFileName}-{statement.Month}.xlsx";
 
-            var googleSheetShortcutPath = Path.Combine(WorkbookDirectory, GoogleSheetShortcutFileName);
-            if (File.Exists(googleSheetShortcutPath))
-            {
-                throw new InvalidOperationException(
-                    $"Target '{googleSheetShortcutPath}' is a Google Sheets shortcut (.gsheet), not an Excel workbook. " +
-                    $"This app can only update '{WorkbookFileName}' with EPPlus. Use a real .xlsx file in that folder or add Google Sheets API support.");
-            }
+            var workbookPath = Path.Combine(WorkbookDirectory, filename);
+            //if (File.Exists(workbookPath))
+            //{
+            //    return workbookPath;
+            //}
 
-            throw new FileNotFoundException(
-                $"Could not find '{WorkbookFileName}' in '{WorkbookDirectory}'.",
-                workbookPath);
+            return workbookPath;
+
+            //var googleSheetShortcutPath = Path.Combine(WorkbookDirectory, GoogleSheetShortcutFileName);
+            //if (File.Exists(googleSheetShortcutPath))
+            //{
+            //    throw new InvalidOperationException(
+            //        $"Target '{googleSheetShortcutPath}' is a Google Sheets shortcut (.gsheet), not an Excel workbook. " +
+            //        $"This app can only update '{filename}' with EPPlus. Use a real .xlsx file in that folder or add Google Sheets API support.");
+            //}
+
+            //throw new FileNotFoundException(
+            //    $"Could not find '{filename}' in '{WorkbookDirectory}'.",
+            //    workbookPath);
         }
 
         private static void ExpandTrackedRange(string workbookPath, int lastRow)

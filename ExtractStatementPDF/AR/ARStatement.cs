@@ -18,12 +18,9 @@ namespace ExtractStatementPDF.AR
 
         public bool IsValid()
         {
-            var totalOrders = Orders.Count;
             var manualOrders = Orders.Where(t => Regex.IsMatch(t.Reference, "[A-Za-z]")).Count();
 
-            var percentage = (double)manualOrders / totalOrders;
-
-            return percentage < 0.5;
+            return manualOrders <= 1;
         }
 
         public void AddOrders(List<AROrder> orders)
