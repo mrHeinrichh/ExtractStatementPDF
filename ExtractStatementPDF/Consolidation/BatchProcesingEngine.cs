@@ -4,6 +4,12 @@ using System.Text.RegularExpressions;
 
 namespace ExtractStatementPDF.Consolidation
 {
+    public record FileMatchResult(
+        string Name,
+        IEnumerable<FileInfo> CsvFiles,
+        IEnumerable<FileInfo> ArFiles
+    );
+
     public class BatchProcesingEngine
     {
         private ARExtractor _arExtractor = new ARExtractor();
@@ -38,18 +44,17 @@ namespace ExtractStatementPDF.Consolidation
 
             foreach (var file in arCopies)
             {
-              
                 var statement = _arExtractor.Extract(file.FullName);
 
                 if (!statement.IsValid())
                 {
                     invalidStatements.Add(statement);
 
-                    MoveFilesTo(null, [file], archiveDirectory);
+                    MoveFilesTo([], [file], archiveDirectory);
                 }
                 else
                 {
-                    MoveFilesTo(null, [file], verifiedDirectory);
+                    MoveFilesTo([], [file], verifiedDirectory);
 
                 }
             }
@@ -81,9 +86,9 @@ namespace ExtractStatementPDF.Consolidation
 
             foreach (var match in matches)
             {
-                if (match.Value.Count() > 0)
+                if (match.ArFiles.Count() > 0)
                 {
-                    MoveFilesTo(match.Key, match.Value, matchedDirectory);
+                    MoveFilesTo(match.CsvFiles, match.ArFiles, matchedDirectory);
                 }
             }
         }
@@ -117,16 +122,16 @@ namespace ExtractStatementPDF.Consolidation
 
             foreach (var match in matches)
             {
-                var statement = Reconciliate(match.Key, match.Value);
+                var statement = Reconciliate(match);
 
                 if (statement.IsValid())
                 {
                     statements.Add(statement);
-                    MoveFilesTo(match.Key, match.Value, processedDirectory);
+                    MoveFilesTo(match.CsvFiles, match.ArFiles, processedDirectory);
                 }
                 else
                 {
-                    MoveFilesTo(match.Key, match.Value, archivedDirectory);
+                    MoveFilesTo(match.CsvFiles, match.ArFiles, archivedDirectory);
                 }
             }
 
@@ -149,10 +154,12 @@ namespace ExtractStatementPDF.Consolidation
             return directory;
         }
 
-        private static void MoveFilesTo(FileInfo? csv, IEnumerable<FileInfo> arFiles, string directory)
+        private static void MoveFilesTo(IEnumerable<FileInfo> csvs, IEnumerable<FileInfo> arFiles, string directory)
         {
-            if (csv is not null)
-                MoveToDirectory(csv, directory);
+            foreach (var file in csvs)
+            {
+                MoveToDirectory(file, directory);
+            }
 
             foreach (var file in arFiles)
             {
@@ -175,18 +182,22 @@ namespace ExtractStatementPDF.Consolidation
             accountingIssues.Update(s);
         }
 
-        private static Dictionary<FileInfo, IEnumerable<FileInfo>> MatchFiles(List<FileInfo> arCopies, List<FileInfo> csvs)
+        private static IEnumerable<FileMatchResult> MatchFiles(List<FileInfo> arCopies, List<FileInfo> csvs)
         {
-            var matches = new Dictionary<FileInfo, IEnumerable<FileInfo>>();
-            foreach (var currentCsv in csvs)
+            var lookupKeys = csvs.Select(t => BuildLookupKey(t.FullName)).Distinct();
+            var matches = new List<FileMatchResult>();
+
+            foreach (var lookupKey in lookupKeys)
             {
-                var csvKey = BuildLookupKey(currentCsv.FullName);
+                var matchingCsvs = csvs.Where(t => BuildLookupKey(t.FullName) == lookupKey)
+                    .ToList();
+
                 var matchingPdfs = arCopies
-                    .Where(t => BuildLookupKey(t.FullName) == csvKey)
+                    .Where(t => BuildLookupKey(t.FullName) == lookupKey)
                     .OrderByDescending(t => string.Equals(t.Extension, ".pdf", StringComparison.OrdinalIgnoreCase))
                     .ThenBy(t => t.Name);
 
-                matches.Add(currentCsv, matchingPdfs);
+                matches.Add(new FileMatchResult(lookupKey, matchingCsvs, matchingPdfs));
             }
 
             return matches;
@@ -202,10 +213,10 @@ namespace ExtractStatementPDF.Consolidation
             return "";
         }
 
-        private ConsolidatedStatement Reconciliate(FileInfo csv, IEnumerable<FileInfo> pdfs)
+        private ConsolidatedStatement Reconciliate(FileMatchResult fileMatchResult)
         {
-            var arStatement = _arExtractor.Extract(pdfs.Select(t => t.FullName));
-            var rxOfficeStatement = _rxOfficeExtractor.Extract(csv.FullName);
+            var arStatement = _arExtractor.Extract(fileMatchResult.ArFiles.Select(t => t.FullName));
+            var rxOfficeStatement = _rxOfficeExtractor.Extract(fileMatchResult.CsvFiles.Select(t => t.FullName));
 
             var statement = new ConsolidatedStatement(arStatement, rxOfficeStatement);
 

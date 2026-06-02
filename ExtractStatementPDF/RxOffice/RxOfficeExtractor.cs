@@ -19,5 +19,24 @@ namespace ExtractStatementPDF.RxOffice
 
             return statement;
         }
+
+        public RxOfficeStatement Extract(IEnumerable<string> fullpaths)
+        {
+            var filename = Path.GetFileName(fullpaths.First());
+            var statement = new RxOfficeStatement(filename);
+
+            foreach (var fullpath in fullpaths)
+            {
+                using var reader = new StreamReader(fullpath);
+                using var csv = new CsvReader(reader, CultureInfo.InvariantCulture);
+                csv.Context.RegisterClassMap<RxOfficeOrderMap>();
+
+                var records = csv.GetRecords<RxOfficeOrder>();
+
+                statement.AddOrders(records);
+            }
+
+            return statement;
+        }
     }
 }
