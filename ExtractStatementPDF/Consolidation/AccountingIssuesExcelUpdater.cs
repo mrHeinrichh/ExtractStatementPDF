@@ -58,8 +58,6 @@ namespace ExtractStatementPDF.Consolidation
                 lastRow = nextRow - 1;
                 package.Save();
             }
-
-            ExpandTrackedRange(workbookPath, lastRow);
         }
 
         private static void CopyRowFormatting(ExcelWorksheet ws, int row)
