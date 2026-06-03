@@ -31,7 +31,7 @@ namespace ExtractStatementPDF.Consolidation
             Filename = name;
             ParseFilename(name);
 
-            var arOrders = arStatement.Orders;
+            var arOrders = arStatement.Orders.Where(t => !Regex.IsMatch(t.Reference, "[A-Za-z]"));
             var rxOfficeOrders = rxOfficeStatement.Orders;
 
             ConsolidatedOrders = (
