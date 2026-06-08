@@ -32,7 +32,7 @@ namespace ExtractStatementPDF.Consolidation
                 {
                     return "RxOffice Order is missing";
                 }
-                if (RxOfficeOrder.Net == 0m && AROrder.Net > 0)
+                if (RxOfficeOrder.Gross == 0m && AROrder.Gross > 0)
                 {
                     return "RxOffice price didn't compute";
                 }
