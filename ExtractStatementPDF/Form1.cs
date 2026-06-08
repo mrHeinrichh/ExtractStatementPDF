@@ -1,6 +1,7 @@
 using ExtractStatementPDF.AR;
 using ExtractStatementPDF.Consolidation;
 using ExtractStatementPDF.RxOffice;
+using System.Reactive.Linq;
 
 namespace ExtractStatementPDF
 {
@@ -9,6 +10,8 @@ namespace ExtractStatementPDF
         private ARStatement? arStatement;
 
         private RxOfficeStatement? rxOfficeStatement;
+
+        private IDisposable? subscription;
 
         public Form1()
         {
@@ -77,19 +80,42 @@ namespace ExtractStatementPDF
                 var directory = SelectDirectory();
                 if (directory == string.Empty) return;
 
-                txtUpdate.AppendText("Processing started...");
+                txtUpdate.AppendText("Processing started...\n");
 
-                await Task.Run(() =>
-                {
-                    engine.Process(directory);
-                });
-
-                txtUpdate.AppendText("Processing complete.");
+                subscription = engine.Process(directory)
+                    .Subscribe((t) =>
+                    {
+                        BeginInvoke(() =>
+                        {
+                            txtUpdate.AppendText($"{t.Message}\n");
+                        });
+                    },
+                    ex =>
+                    {
+                        BeginInvoke(() =>
+                        {
+                            txtUpdate.AppendText(
+                            $"ERROR: {ex.Message}{Environment.NewLine}");
+                        });
+                    },
+                    () =>
+                    {
+                        BeginInvoke(() =>
+                        {
+                            txtUpdate.AppendText("Completed" + Environment.NewLine);
+                        });
+                    });
             }
             catch
             {
                 txtUpdate.AppendText("Processing aborted due to error.");
             }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            subscription?.Dispose();
+            base.OnFormClosed(e);
         }
 
         private async void button5_Click(object sender, EventArgs e)

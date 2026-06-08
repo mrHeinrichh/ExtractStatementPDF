@@ -13,7 +13,7 @@ namespace ExtractStatementPDF.Consolidation
 
         public string Date => AROrder?.Date ?? RxOfficeOrder?.Date ?? "-";
 
-        public decimal Variance => Math.Abs((AROrder?.Net ?? 0m) - (RxOfficeOrder?.Net ?? 0m));
+        public decimal Variance => (AROrder?.Net ?? 0m) - (RxOfficeOrder?.Net ?? 0m);
 
         public string Remarks
         {

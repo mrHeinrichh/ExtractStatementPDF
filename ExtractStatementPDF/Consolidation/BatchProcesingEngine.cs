@@ -1,5 +1,7 @@
 ﻿using ExtractStatementPDF.AR;
 using ExtractStatementPDF.RxOffice;
+using System.Reactive.Linq;
+using System.Reactive.Subjects;
 using System.Text.RegularExpressions;
 
 namespace ExtractStatementPDF.Consolidation
@@ -9,6 +11,8 @@ namespace ExtractStatementPDF.Consolidation
         IEnumerable<FileInfo> CsvFiles,
         IEnumerable<FileInfo> ArFiles
     );
+
+    public record ProgressUpdate(string Message);
 
     public class BatchProcesingEngine
     {
@@ -93,57 +97,79 @@ namespace ExtractStatementPDF.Consolidation
             }
         }
 
-        public void Process(string directory)
+        public IObservable<ProgressUpdate> Process(string directory)
         {
-            var directoryInfo = new DirectoryInfo(directory);
+            var subject = new Subject<ProgressUpdate>();
 
-            var archivedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Archived);
-            var processedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Processed);
-
-            var arCopies = new List<FileInfo>();
-            var csvs = new List<FileInfo>();
-
-            foreach (var file in directoryInfo.GetFiles($"{Subdirectories.Matched}/*", SearchOption.AllDirectories))
+            Task.Run(() =>
             {
-                switch (file.Extension.ToLowerInvariant())
+                try
                 {
-                    case ".pdf":
-                    case ".xls":
-                        arCopies.Add(file);
-                        break;
-                    case ".csv":
-                        csvs.Add(file);
-                        break;
+                    var directoryInfo = new DirectoryInfo(directory);
+
+                    var archivedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Archived);
+                    var processedDirectory = EnsureDirectoryExists(directoryInfo.FullName, Subdirectories.Processed);
+
+                    var arCopies = new List<FileInfo>();
+                    var csvs = new List<FileInfo>();
+
+                    foreach (var file in directoryInfo.GetFiles($"{Subdirectories.Matched}/*", SearchOption.AllDirectories))
+                    {
+                        switch (file.Extension.ToLowerInvariant())
+                        {
+                            case ".pdf":
+                            case ".xls":
+                                arCopies.Add(file);
+                                break;
+                            case ".csv":
+                                csvs.Add(file);
+                                break;
+                        }
+                    }
+
+                    var matches = MatchFiles(arCopies, csvs);
+                    var statements = new List<ConsolidatedStatement>();
+
+                    foreach (var match in matches)
+                    {
+                        var statement = Reconciliate(match);
+
+                        if (statement.IsValid())
+                        {
+                            statements.Add(statement);
+                            MoveFilesTo(match.CsvFiles, match.ArFiles, processedDirectory);
+                        }
+                        else
+                        {
+                            MoveFilesTo(match.CsvFiles, match.ArFiles, archivedDirectory);
+                        }
+
+                        subject.OnNext(new ProgressUpdate(match.Name));
+                    }
+
+                    foreach (var statement in statements)
+                    {
+                        var bytes = _excelGenerator.GenerateExcel(statement);
+                        var filename = Path.GetFileNameWithoutExtension(statement.Filename) + ".xlsx";
+                        using var filestream = new FileStream($"{directory}/{filename}", FileMode.CreateNew, FileAccess.Write);
+                        filestream.Write(bytes);
+                    }
+
+                    Update(statements);
+
+                    subject.OnCompleted();
                 }
-            }
-
-            var matches = MatchFiles(arCopies, csvs);
-            var statements = new List<ConsolidatedStatement>();
-
-            foreach (var match in matches)
-            {
-                var statement = Reconciliate(match);
-
-                if (statement.IsValid())
+                catch (Exception ex)
                 {
-                    statements.Add(statement);
-                    MoveFilesTo(match.CsvFiles, match.ArFiles, processedDirectory);
+                    subject.OnError(ex);
                 }
-                else
+                finally
                 {
-                    MoveFilesTo(match.CsvFiles, match.ArFiles, archivedDirectory);
+                    subject.Dispose();
                 }
-            }
+            });
 
-            foreach (var statement in statements)
-            {
-                var bytes = _excelGenerator.GenerateExcel(statement);
-                var filename = Path.GetFileNameWithoutExtension(statement.Filename) + ".xlsx";
-                using var filestream = new FileStream($"{directory}/{filename}", FileMode.CreateNew, FileAccess.Write);
-                filestream.Write(bytes);
-            }
-
-            Update(statements);
+            return subject;
         }
 
         private static string EnsureDirectoryExists(string rootDirectory, string subdirectory)
@@ -185,19 +211,14 @@ namespace ExtractStatementPDF.Consolidation
         private static IEnumerable<FileMatchResult> MatchFiles(List<FileInfo> arCopies, List<FileInfo> csvs)
         {
             var filenames = new List<FileInfo>().Concat(arCopies).Concat(csvs);
-            var lookupKeys = filenames.Select(t => BuildLookupKey(t.FullName)).Distinct();
+            var lookupKeys = filenames.Select(t => BuildLookupKey(t.FullName)).Distinct().Order();
             
             var matches = new List<FileMatchResult>();
 
             foreach (var lookupKey in lookupKeys)
             {
-                var matchingCsvs = csvs.Where(t => BuildLookupKey(t.FullName) == lookupKey)
-                    .ToList();
-
-                var matchingPdfs = arCopies
-                    .Where(t => BuildLookupKey(t.FullName) == lookupKey)
-                    .OrderByDescending(t => string.Equals(t.Extension, ".pdf", StringComparison.OrdinalIgnoreCase))
-                    .ThenBy(t => t.Name);
+                var matchingCsvs = csvs.Where(t => BuildLookupKey(t.FullName) == lookupKey);
+                var matchingPdfs = arCopies.Where(t => BuildLookupKey(t.FullName) == lookupKey);
 
                 matches.Add(new FileMatchResult(lookupKey, matchingCsvs, matchingPdfs));
             }
