@@ -2,6 +2,7 @@ using ExtractStatementPDF.AR;
 using ExtractStatementPDF.Consolidation;
 using ExtractStatementPDF.RxOffice;
 using System.Reactive.Linq;
+using ExtractStatementPDF.SOA;
 
 namespace ExtractStatementPDF
 {
@@ -150,6 +151,68 @@ namespace ExtractStatementPDF
             if (directory == string.Empty) return;
 
             engine.VerifyMatches(directory);
+        }
+
+        private async void button7_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var directory = SelectDirectory();
+                if (directory == string.Empty) return;
+
+                var renamer = new SoaRenamer();
+
+                txtUpdate.AppendText(Environment.NewLine + "Scanning SOA files...");
+
+                var files = await Task.Run(() => renamer.Scan(directory));
+
+                if (files.Count == 0)
+                {
+                    txtUpdate.AppendText(Environment.NewLine + "No .xls files found.");
+                    return;
+                }
+
+                foreach (var file in files)
+                {
+                    if (file.Error != null)
+                    {
+                        txtUpdate.AppendText(Environment.NewLine + $"SKIPPED {file.FileName} ({file.Error})");
+                    }
+                    else if (!file.CanRename)
+                    {
+                        txtUpdate.AppendText(Environment.NewLine + $"OK {file.FileName} (already correct)");
+                    }
+                    else
+                    {
+                        txtUpdate.AppendText(Environment.NewLine + $"{file.FileName} -> {file.NewName}");
+                    }
+                }
+
+                var renamable = files.Where(f => f.CanRename).ToList();
+
+                if (renamable.Count == 0)
+                {
+                    txtUpdate.AppendText(Environment.NewLine + "Nothing to rename.");
+                    return;
+                }
+
+                var confirm = MessageBox.Show(
+                    $"Rename {renamable.Count} of {files.Count} files?",
+                    "Rename SOA Files",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (confirm != DialogResult.Yes) return;
+
+                var log = await Task.Run(() => renamer.Apply(renamable));
+
+                txtUpdate.AppendText(Environment.NewLine + string.Join(Environment.NewLine, log));
+                txtUpdate.AppendText(Environment.NewLine + "Renaming complete.");
+            }
+            catch (Exception ex)
+            {
+                txtUpdate.AppendText(Environment.NewLine + $"Renaming aborted due to error: {ex.Message}");
+            }
         }
 
         private static string SelectCSV()
