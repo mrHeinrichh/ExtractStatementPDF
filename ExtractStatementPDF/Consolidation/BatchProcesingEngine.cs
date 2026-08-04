@@ -36,6 +36,7 @@ namespace ExtractStatementPDF.Consolidation
                 {
                     case ".pdf":
                     case ".xls":
+                    case ".ods":
                         arCopies.Add(file);
                         break;
                 }
