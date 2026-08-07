@@ -84,6 +84,110 @@ function Browse-File([string]$title) {
 }
 
 
+# ===================== src\04-Choose-Acct.ps1 =====================
+# ---- Choose which Accounting instance to drive ----------------------------
+# Lets you pick from the running Accounting windows (PID + title + exe path) when
+# more than one is open, and remembers the choice ($script:AcctPid) so every other
+# function targets that exact window. This is what lets it work on a PC that has a
+# differently-located window or more than one Accounting open.
+
+$script:AcctPid = $null
+
+# Return the running Accounting windows as @{ Pid; Path; Title; Handle }.
+function Get-AcctCandidates {
+  $list = New-Object System.Collections.Generic.List[object]
+  $procs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $_.MainWindowHandle -ne 0 -and (
+      $_.ProcessName -like 'Accounting*' -or ($_.MainWindowTitle -like '*Accounting( Version*')
+    )
+  }
+  foreach ($p in $procs) {
+    $path = ''
+    try { $path = $p.Path } catch {}
+    $list.Add([pscustomobject]@{ Pid=$p.Id; Path=$path; Title=$p.MainWindowTitle; Handle=$p.MainWindowHandle })
+  }
+  return $list
+}
+
+# Show the picker (only when >1). Sets $script:AcctPid. Returns the chosen
+# candidate, or $null if none running / cancelled.
+function Choose-Acct {
+  $cands = @(Get-AcctCandidates)
+  if ($cands.Count -eq 0) { return $null }
+  if ($cands.Count -eq 1) { $script:AcctPid = $cands[0].Pid; return $cands[0] }
+
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = "Choose the Accounting window to use"
+  $form.Size = New-Object System.Drawing.Size(760, 300)
+  $form.StartPosition = "CenterScreen"; $form.TopMost = $true
+
+  $label = New-Object System.Windows.Forms.Label
+  $label.Text = "More than one Accounting is open - pick the one to extract from:"
+  $label.Location = '12,10'; $label.AutoSize = $true; $form.Controls.Add($label)
+
+  $lb = New-Object System.Windows.Forms.ListBox
+  $lb.Location = '12,35'; $lb.Size = New-Object System.Drawing.Size(720, 180)
+  $lb.Anchor = "Top,Left,Right,Bottom"; $lb.HorizontalScrollbar = $true
+  foreach ($c in $cands) { [void]$lb.Items.Add(("PID {0}   |   {1}   |   {2}" -f $c.Pid, $c.Title, $c.Path)) }
+  $lb.SelectedIndex = 0
+  $form.Controls.Add($lb)
+
+  $ok = New-Object System.Windows.Forms.Button
+  $ok.Text = "Use this one"; $ok.Location = '556,222'; $ok.Size = '95,30'
+  $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK; $ok.Anchor = "Bottom,Right"
+  $form.Controls.Add($ok); $form.AcceptButton = $ok
+
+  $cancel = New-Object System.Windows.Forms.Button
+  $cancel.Text = "Cancel"; $cancel.Location = '657,222'; $cancel.Size = '75,30'
+  $cancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel; $cancel.Anchor = "Bottom,Right"
+  $form.Controls.Add($cancel); $form.CancelButton = $cancel
+
+  if ($form.ShowDialog() -ne [System.Windows.Forms.DialogResult]::OK) { return $null }
+  $chosen = $cands[$lb.SelectedIndex]
+  $script:AcctPid = $chosen.Pid
+  return $chosen
+}
+
+
+# ===================== src\05-Elevation.ps1 =====================
+# ---- Elevation / UAC mismatch detection -----------------------------------
+# UI Automation cannot drive an app running at a HIGHER integrity level than
+# itself (Windows UIPI). If Accounting is "Run as administrator" but this tool is
+# not, the window's title is readable (login check passes) yet its controls are
+# invisible and it won't respond to maximize -> the confusing "pane not found".
+# These helpers let us detect that and tell the user exactly what to do.
+
+# Is THIS process elevated (running as administrator)?
+function Test-SelfElevated {
+  try {
+    $id = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    return (New-Object System.Security.Principal.WindowsPrincipal($id)).IsInRole(
+      [System.Security.Principal.WindowsBuiltInRole]::Administrator)
+  } catch { return $false }
+}
+
+# Can we read the chosen Accounting process's module path? If NOT (access denied),
+# it's almost certainly running at a higher integrity level than us.
+function Test-AcctAccessible {
+  try { $p = Get-Acct; $null = $p.Path; return $true } catch { return $false }
+}
+
+# Returns $true if there is an elevation mismatch that will block automation.
+function Test-ElevationMismatch {
+  return ((-not (Test-AcctAccessible)) -and (-not (Test-SelfElevated)))
+}
+
+$ElevationHelp =
+  "Accounting appears to be running as Administrator, but this tool is not." + [Environment]::NewLine +
+  "Windows blocks a normal program from automating an elevated one, so its" + [Environment]::NewLine +
+  "buttons/panes are invisible to this tool." + [Environment]::NewLine + [Environment]::NewLine +
+  "Fix (either one):" + [Environment]::NewLine +
+  "  - Restart Accounting WITHOUT 'Run as administrator' (matches this tool), OR" + [Environment]::NewLine +
+  "  - Right-click SOA-Extractor.exe and 'Run as administrator'." + [Environment]::NewLine + [Environment]::NewLine +
+  "Note: if you run this as administrator, a Google Drive 'G:' reference may not be" + [Environment]::NewLine +
+  "visible - copy RxOffice.csv to a local folder (e.g. Documents) and browse to that."
+
+
 # ===================== src\10-Pick-Folder.ps1 =====================
 # Pick-Folder : show the paste-a-path dialog (with a Browse... button).
 # Returns the chosen folder path, or $null if cancelled.
@@ -143,8 +247,13 @@ function Pick-Folder {
 
 
 # ===================== src\11-Get-Acct.ps1 =====================
-# Get-Acct : return the running Accounting.exe process, or throw if not running.
+# Get-Acct : return the Accounting process to drive. Prefers the one chosen via
+# Choose-Acct ($script:AcctPid); otherwise the first running "Accounting" process.
 function Get-Acct {
+  if ($script:AcctPid) {
+    $p = Get-Process -Id $script:AcctPid -ErrorAction SilentlyContinue
+    if ($p) { return $p }
+  }
   $p = Get-Process Accounting -ErrorAction SilentlyContinue | Select-Object -First 1
   if (-not $p) { throw "Accounting.exe is not running. Open it and log in first." }
   return $p
@@ -231,25 +340,24 @@ function Shot([string]$name) {
 #
 # Shows a message box and returns $false if not ready; otherwise $true.
 
+# Titles of every top-level window of the CHOSEN Accounting process (via Get-Acct).
 function Get-AcctWindowTitles {
-  $procs = Get-Process Accounting -ErrorAction SilentlyContinue
-  if (-not $procs) { return @() }
+  $proc = $null
+  try { $proc = Get-Acct } catch { return @() }
   $titles = New-Object System.Collections.Generic.List[string]
   $desktop = $AE::RootElement
-  foreach ($proc in $procs) {
-    try {
-      $cond = New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, [int]$proc.Id)
-      $wins = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
-      foreach ($w in $wins) { $titles.Add([string]$w.Current.Name) }
-    } catch {}
-    if ($proc.MainWindowTitle) { $titles.Add([string]$proc.MainWindowTitle) }
-  }
+  try {
+    $cond = New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, [int]$proc.Id)
+    $wins = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+    foreach ($w in $wins) { $titles.Add([string]$w.Current.Name) }
+  } catch {}
+  if ($proc.MainWindowTitle) { $titles.Add([string]$proc.MainWindowTitle) }
   return $titles
 }
 
 function Assert-AcctLoggedIn {
-  $procs = Get-Process Accounting -ErrorAction SilentlyContinue
-  if (-not $procs) {
+  $running = Get-Process Accounting -ErrorAction SilentlyContinue
+  if (-not $running -and -not $script:AcctPid) {
     Show-Message "Accounting is not open.`n`nPlease open Accounting.exe and log in (user hfabros), then run this again."
     return $false
   }
@@ -311,6 +419,42 @@ function Get-Candidates([string]$name) {
 }
 
 
+# ===================== src\23-WordWrap.ps1 =====================
+# WordWrap : normalize a KeyOf() value to a word-bounded form for safe fuzzy
+# matching. Non-alphanumerics become spaces and the whole thing is wrapped in
+# spaces, so .Contains(" ESCA ") matches the WORD "ESCA" only - never the "ESCA"
+# buried inside "LESCANO". Used by Resolve-Frequency.
+function WordWrap([string]$k) {
+  if (-not $k) { return ' ' }
+  return ' ' + ((($k -replace '[^A-Z0-9]',' ') -replace '\s+',' ').Trim()) + ' '
+}
+
+# Tokenize : split a name into UPPERCASE alphanumeric words (punctuation dropped),
+# used for word-level prefix matching between AR names and RxOffice names.
+#   "ABALOS GUILLERMO OPTICAL" -> @('ABALOS','GUILLERMO','OPTICAL')
+function Tokenize([string]$s) {
+  if (-not $s) { return @() }
+  return @((($s.ToUpperInvariant() -replace '[^A-Z0-9]',' ') -split '\s+') | Where-Object { $_ -ne '' })
+}
+
+# Test-Prefix : is $short the leading run of words of $long? (both string[])
+function Test-Prefix($short, $long) {
+  if ($short.Count -eq 0 -or $short.Count -gt $long.Count) { return $false }
+  for ($i = 0; $i -lt $short.Count; $i++) { if ($short[$i] -ne $long[$i]) { return $false } }
+  return $true
+}
+
+# TightKey : strip EVERYTHING except letters/digits and upper-case, so different
+# spacing/punctuation/casing collapse to one key. This is how an AR name matches
+# the reference's ARName column:
+#   "ABALOS GUILLERMO OPTICAL"  ->  "ABALOSGUILLERMOOPTICAL"
+#   "AbalosGuillermoOptical"    ->  "ABALOSGUILLERMOOPTICAL"
+function TightKey([string]$s) {
+  if (-not $s) { return '' }
+  return ($s -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
+}
+
+
 # ===================== src\30-Get-Dialog.ps1 =====================
 # Get-Dialog : return the "Statement options" window element, or $null if closed.
 function Get-Dialog {
@@ -320,27 +464,70 @@ function Get-Dialog {
 
 
 # ===================== src\31-Open-StatementDialog.ps1 =====================
-# Open-StatementDialog : go to the Accounting Print tab and double-click the
-# Statement tile's ICON (~25px above its label - the label itself isn't clickable),
-# then wait for the "Statement options" dialog. Returns the dialog element.
+# Open-StatementDialog : make sure the Accounting Print pane is showing, then
+# double-click the Statement tile's ICON (~25px above its label) and wait for the
+# "Statement options" dialog. Returns the dialog element.
+#
+# Robust across machines/monitors:
+#   * clicks the LEFTMOST "Accounting Print" sidebar item relative to THIS window
+#     (not a hardcoded screen-left assumption), and retries;
+#   * if the pane still can't be found, throws a diagnostic listing what it DID see
+#     (window rect, left-column labels, custom panes) so a failing PC is easy to debug.
 function Open-StatementDialog {
-  $p = Focus-Acct; $root = $AE::FromHandle($p.MainWindowHandle)
-  $apCond = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "Accounting Print")
-  foreach ($ap in $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $apCond)) {
-    if ($ap.Current.ClassName -eq 'TextBlock' -and $ap.Current.BoundingRectangle.X -lt 200) {
-      $b = $ap.Current.BoundingRectangle; Click ([int]($b.X+$b.Width/2)) ([int]($b.Y+$b.Height/2)); Start-Sleep -Milliseconds 600; break
+  $p = Focus-Acct
+  $root = $AE::FromHandle($p.MainWindowHandle)
+  $wr = New-Object SOA.Win+RECT
+  [SOA.Win]::GetWindowRect($p.MainWindowHandle, [ref]$wr) | Out-Null
+
+  # Click the "Accounting Print" sidebar item (leftmost one within this window),
+  # then wait for the PrintAccountingReports pane. Retry a few times.
+  $par = $null
+  for ($attempt = 0; $attempt -lt 4 -and -not $par; $attempt++) {
+    $apCond = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "Accounting Print")
+    $aps = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $apCond) |
+             Where-Object { $_.Current.ClassName -eq 'TextBlock' -and $_.Current.BoundingRectangle.Width -gt 0 } |
+             Sort-Object { $_.Current.BoundingRectangle.X })
+    if ($aps.Count -gt 0) {
+      $b = $aps[0].Current.BoundingRectangle
+      Click ([int]($b.X + $b.Width/2)) ([int]($b.Y + $b.Height/2))
+    }
+    for ($t = 0; $t -lt 10; $t++) {
+      $parCond = New-Object System.Windows.Automation.PropertyCondition($AE::ClassNameProperty, "PrintAccountingReports")
+      $par = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $parCond)
+      if ($par) { break }
+      Start-Sleep -Milliseconds 300
     }
   }
-  $parCond = New-Object System.Windows.Automation.PropertyCondition($AE::ClassNameProperty, "PrintAccountingReports")
-  $par = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $parCond)
-  if (-not $par) { throw "Accounting Print pane not found." }
+
+  if (-not $par) {
+    # Build a diagnostic of what this window actually exposes.
+    $labels = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                 (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Text))) |
+               Where-Object { $_.Current.BoundingRectangle.X -lt ($wr.Left + 320) -and $_.Current.Name } |
+               ForEach-Object { $_.Current.Name } | Select-Object -Unique -First 25)
+    $customs = @($root.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                 (New-Object System.Windows.Automation.PropertyCondition($AE::ControlTypeProperty, [System.Windows.Automation.ControlType]::Custom))) |
+               ForEach-Object { $_.Current.ClassName } | Where-Object { $_ } | Select-Object -Unique)
+    $elevNote = if (Test-ElevationMismatch) {
+      "`n  *** ELEVATION MISMATCH: Accounting is elevated but this tool is not - run this tool as administrator, or restart Accounting without admin. ***"
+    } else {
+      "  (this tool elevated=$(Test-SelfElevated); Accounting readable=$(Test-AcctAccessible))"
+    }
+    throw ("Accounting Print pane not found.`n" +
+           "  Window rect: $($wr.Left),$($wr.Top)-$($wr.Right),$($wr.Bottom)`n" +
+           "  Left-column labels seen: " + ($labels -join ', ') + "`n" +
+           "  Custom panes seen: " + ($customs -join ', ') + "`n" +
+           $elevNote + "`n" +
+           "  -> Make sure the chosen Accounting window is logged in and on the General > Accounting Print tab.")
+  }
+
   $stCond = New-Object System.Windows.Automation.PropertyCondition($AE::NameProperty, "Statement")
   $st = $par.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $stCond)
-  if (-not $st) { throw "'Statement' tile not found." }
-  $r = $st.Current.BoundingRectangle; $cx = [int]($r.X+$r.Width/2); $iy = [int]($r.Y-25)
-  for ($i=0; $i -lt 4; $i++) {
+  if (-not $st) { throw "'Statement' tile not found inside the Accounting Print pane." }
+  $r = $st.Current.BoundingRectangle; $cx = [int]($r.X + $r.Width/2); $iy = [int]($r.Y - 25)
+  for ($i = 0; $i -lt 4; $i++) {
     Click $cx $iy -Double
-    for ($t=0; $t -lt 15; $t++) { $d = Get-Dialog; if ($d) { return $d }; Start-Sleep -Milliseconds 200 }
+    for ($t = 0; $t -lt 15; $t++) { $d = Get-Dialog; if ($d) { return $d }; Start-Sleep -Milliseconds 200 }
     Start-Sleep -Milliseconds 400
   }
   throw "Statement options dialog did not open."
@@ -512,51 +699,79 @@ function Export-Csv-FromReport([string]$targetCsv) {
 function KeyOf([string]$s) { return ($s -replace '\s+',' ').Trim().ToUpperInvariant() }
 
 
-# ===================== src\51-Load-FreqTable.ps1 =====================
-# Load-FreqTable : read a reference CSV into a hashtable  KeyOf(name) -> frequency.
-# Supports two formats automatically:
-#   1) Contact.exe "Export" file  - UTF-16, TAB-delimited, many columns incl.
-#      "Name", "Alias" and "StatementFrequency". Both Name and Alias are mapped
-#      so an .xls customer name matches whichever Contact used.
-#   2) Simple 2-column CSV         - "Customer","Frequency" (UTF-8), e.g. an older
-#      CustomerFrequency export.
-# Returns @{ Map = <hashtable>; Source = <path or '(none)'> }.
-function Load-FreqTable([string]$path) {
-  $map = @{}
-  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return @{ Map=$map; Source='(none)' } }
+# ===================== src\51-Load-Reference.ps1 =====================
+# Load-Reference : read the reference customer list into two lookups:
+#   ByKey   : KeyOf(RxOfficeName) -> @{ Name=<RxOffice name>; Freq; Tokens }  (exact + word-prefix)
+#   ByTight : TightKey(x)         -> @{ Name=<RxOffice name>; Freq }          (punctuation/spacing-
+#             insensitive; includes the RxOfficeName AND its ARName alias)
+# A match gives us BOTH the exact RxOffice name to type in Accounting and the frequency.
+#
+# Accepts:
+#   * RxOffice + ARName - comma CSV: Id,Code,RxOfficeName,StatementFrequency,ARName
+#                         (ARName is the AR file/customer alias, e.g. "AbalosGuillermoOptical")
+#   * RxOffice          - comma CSV: Id,Code,Name,StatementFrequency
+#   * Contact export    - UTF-16, TAB-delimited: Name / Alias / StatementFrequency
+#   * Simple            - comma CSV: Customer,Frequency
+# Returns @{ ByKey=<hashtable>; ByTight=<hashtable>; Source=<path or '(none)'> }.
+function Load-Reference([string]$path) {
+  $byKey = @{}; $byTight = @{}
+  $result = @{ ByKey=$byKey; ByTight=$byTight; Source='(none)' }
+  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return $result }
 
-  # Detect encoding from the byte-order mark.
-  $bytes = [System.IO.File]::ReadAllBytes($path)
+  # shared read (the file may be open in Excel)
+  $fs = New-Object System.IO.FileStream($path,[System.IO.FileMode]::Open,[System.IO.FileAccess]::Read,[System.IO.FileShare]::ReadWrite)
+  $rd = New-Object System.IO.BinaryReader($fs); $bytes = $rd.ReadBytes([int]$fs.Length); $rd.Close(); $fs.Close()
   $enc = [System.Text.Encoding]::UTF8
-  if     ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $enc = [System.Text.Encoding]::Unicode }           # UTF-16 LE
-  elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { $enc = [System.Text.Encoding]::BigEndianUnicode }   # UTF-16 BE
-  $text  = $enc.GetString($bytes)
+  if     ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $enc = [System.Text.Encoding]::Unicode }
+  elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { $enc = [System.Text.Encoding]::BigEndianUnicode }
+  $text = $enc.GetString($bytes)
+  if ($text.Length -gt 0 -and $text[0] -eq [char]0xFEFF) { $text = $text.Substring(1) }
   $lines = $text -split "\r?\n"
-  if ($lines.Count -lt 2) { return @{ Map=$map; Source=$path } }
+  if ($lines.Count -lt 2) { $result.Source = $path; return $result }
 
-  $header = $lines[0]
-  if ($header -match 'StatementFrequency' -and $header.Contains("`t")) {
+  # local helper: register one reference row
+  $add = {
+    param($name, $freq, $alias)
+    if (-not $name -or -not $freq) { return }
+    $entry = @{ Name=$name; Freq=$freq; Tokens=(Tokenize $name) }
+    $k = KeyOf $name;   if ($k  -and -not $byKey.ContainsKey($k))   { $byKey[$k]  = $entry }
+    $t = TightKey $name; if ($t -and -not $byTight.ContainsKey($t)) { $byTight[$t] = $entry }
+    if ($alias) { $at = TightKey $alias; if ($at -and -not $byTight.ContainsKey($at)) { $byTight[$at] = $entry } }
+  }
+
+  if ($lines[0] -match 'StatementFrequency' -and $lines[0].Contains("`t")) {
     # ---- Contact export (tab-delimited) ----
-    $hdr   = $header.Split("`t") | ForEach-Object { $_.Trim().Trim('"') }
-    $iName = [Array]::IndexOf($hdr, 'Name')
-    $iAli  = [Array]::IndexOf($hdr, 'Alias')
-    $iFreq = [Array]::IndexOf($hdr, 'StatementFrequency')
-    for ($i = 1; $i -lt $lines.Count; $i++) {
+    $hdr   = $lines[0].Split("`t") | ForEach-Object { $_.Trim().Trim('"') }
+    $iName = [Array]::IndexOf($hdr,'Name'); $iAli = [Array]::IndexOf($hdr,'Alias'); $iFreq = [Array]::IndexOf($hdr,'StatementFrequency')
+    for ($i=1; $i -lt $lines.Count; $i++) {
       if (-not $lines[$i].Trim()) { continue }
       $c = $lines[$i].Split("`t") | ForEach-Object { $_.Trim().Trim('"') }
       if ($iFreq -lt 0 -or $iFreq -ge $c.Count) { continue }
-      $f = $c[$iFreq]; if (-not $f) { continue }
-      if ($iName -ge 0 -and $iName -lt $c.Count) { $k = KeyOf $c[$iName]; if ($k -and -not $map.ContainsKey($k)) { $map[$k] = $f } }
-      if ($iAli  -ge 0 -and $iAli  -lt $c.Count -and $c[$iAli]) { $k = KeyOf $c[$iAli]; if ($k -and -not $map.ContainsKey($k)) { $map[$k] = $f } }
+      $nm = if ($iName -ge 0 -and $iName -lt $c.Count) { $c[$iName] } else { '' }
+      $al = if ($iAli  -ge 0 -and $iAli  -lt $c.Count) { $c[$iAli]  } else { '' }
+      & $add $nm $c[$iFreq] $al
     }
   } else {
-    # ---- Simple "Customer,Frequency" CSV ----
-    foreach ($row in (Import-Csv -LiteralPath $path -Encoding UTF8)) {
-      $k = KeyOf ([string]$row.Customer); $f = ([string]$row.Frequency).Trim()
-      if ($k -and $f -and -not $map.ContainsKey($k)) { $map[$k] = $f }
+    # ---- comma CSV: RxOffice(+ARName) / RxOffice / simple ----
+    $objs = ($lines | Where-Object { $_.Trim() }) | ConvertFrom-Csv
+    if ($objs) {
+      $cols = $objs[0].PSObject.Properties.Name
+      $nameCol = if ($cols -contains 'RxOfficeName') { 'RxOfficeName' } elseif ($cols -contains 'Name') { 'Name' } elseif ($cols -contains 'Customer') { 'Customer' } else { $null }
+      $freqCol = if ($cols -contains 'StatementFrequency') { 'StatementFrequency' } elseif ($cols -contains 'Frequency') { 'Frequency' } else { $null }
+      $aliasCol = if ($cols -contains 'ARName') { 'ARName' } else { $null }
+      if ($nameCol -and $freqCol) {
+        foreach ($o in $objs) {
+          $nm = ([string]$o.$nameCol).Trim()
+          $f  = ([string]$o.$freqCol).Trim()
+          $al = if ($aliasCol) { ([string]$o.$aliasCol).Trim() } else { '' }
+          & $add $nm $f $al
+        }
+      }
     }
   }
-  return @{ Map=$map; Source=$path }
+
+  $result.Source = $path
+  return $result
 }
 
 
@@ -578,23 +793,42 @@ function Explain($status, $freq) {
 }
 
 
-# ===================== src\53-Resolve-Frequency.ps1 =====================
-# Resolve-Frequency : find a customer's frequency in the reference map.
-# Tries an exact (normalized) match first; if none, tries progressively shorter
-# forms of the name and takes the first table entry that CONTAINS that form.
-# Returns @{ Freq = <frequency or ''>; Via = 'exact' | <term used> | '' }.
-function Resolve-Frequency([string]$name, [hashtable]$map) {
-  if (-not $map -or $map.Count -eq 0) { return @{ Freq=''; Via='' } }
+# ===================== src\53-Resolve-Reference.ps1 =====================
+# Resolve-Reference : match an AR (.xls) customer name to a reference row and
+# return the RxOffice NAME to type in Accounting plus the frequency.
+#
+# Matching, most-precise first:
+#   1) exact         - normalized key equal to an RxOfficeName.
+#   2) tight / ARName - punctuation/spacing/case-insensitive equal to an RxOfficeName
+#                       OR its ARName alias. This is how "ABALOS GUILLERMO OPTICAL"
+#                       matches ARName "AbalosGuillermoOptical" -> types "ABALOS GUILLERMO".
+#   3) word-prefix    - one name's words are the leading run of the other's (>= 2 words),
+#                       e.g. AR "FESAR ... GREENHILLS" <-> "FESAR ... GREENHILLS SHOPPING CENTER".
+# Returns @{ Name=<RxOffice name or ''>; Freq; Via='exact'|'ARname'|"ref '<name>'"|'' }.
+function Resolve-Reference([string]$name, $ref) {
+  if (-not $ref) { return @{ Name=''; Freq=''; Via='' } }
+  $byKey = $ref.ByKey; $byTight = $ref.ByTight
+  if (-not $byKey -or $byKey.Count -eq 0) { return @{ Name=''; Freq=''; Via='' } }
+
   $k = KeyOf $name
-  if ($map.ContainsKey($k)) { return @{ Freq=$map[$k]; Via='exact' } }
-  foreach ($term in (Get-Candidates $name)) {
-    $tk = KeyOf $term
-    if (-not $tk) { continue }
-    $hit = $null
-    foreach ($key in $map.Keys) { if ($key.Contains($tk)) { $hit = $key; break } }
-    if ($hit) { return @{ Freq=$map[$hit]; Via=$term } }
+  if ($byKey.ContainsKey($k)) { $e = $byKey[$k]; return @{ Name=$e.Name; Freq=$e.Freq; Via='exact' } }
+
+  $tk = TightKey $name
+  if ($byTight.ContainsKey($tk)) { $e = $byTight[$tk]; return @{ Name=$e.Name; Freq=$e.Freq; Via='ARname' } }
+
+  $ar = Tokenize $name
+  if ($ar.Count -eq 0) { return @{ Name=''; Freq=''; Via='' } }
+  $best = $null; $bestScore = -1
+  foreach ($e in $byKey.Values) {
+    $t = $e.Tokens
+    if (-not $t -or $t.Count -eq 0) { continue }
+    $score = -1
+    if     (Test-Prefix $t $ar) { if ($t.Count  -ge 2) { $score = ($t.Count  * 1000) - ($ar.Count - $t.Count) } }   # ref shorter
+    elseif (Test-Prefix $ar $t) { if ($ar.Count -ge 2) { $score = ($ar.Count * 1000) - ($t.Count - $ar.Count) } }   # AR shorter
+    if ($score -gt $bestScore) { $bestScore = $score; $best = $e }
   }
-  return @{ Freq=''; Via='' }
+  if ($best) { return @{ Name=$best.Name; Freq=$best.Freq; Via=("ref '{0}'" -f $best.Name) } }
+  return @{ Name=''; Freq=''; Via='' }
 }
 
 
@@ -623,33 +857,34 @@ function Load-Log([string]$logCsv) {
 # Status is DONE / ERROR / SKIPPED. Errors are visible in the Status/Reason cols.
 function Save-Log($rows, [string]$logCsv, [string]$logXlsx) {
   # CSV (UTF-8, so accented names survive) - used for resume next run.
-  $rows | Select-Object Customer, File, DateRange, Frequency, Status, Reason, Csv, UpdatedOn |
+  $rows | Select-Object Customer, RxOfficeName, File, DateRange, Frequency, Status, Reason, Csv, UpdatedOn |
           Export-Csv -NoTypeInformation -LiteralPath $logCsv -Encoding UTF8
 
   # Excel workbook for viewing, with a bold header and coloured Status cells.
   $excel = New-Object -ComObject Excel.Application; $excel.Visible=$false; $excel.DisplayAlerts=$false
   try {
     $wb = $excel.Workbooks.Add(); $ws = $wb.Sheets.Item(1); $ws.Name = 'SOA Log'
-    $headers = @('Customer','File','DateRange','Frequency','Status','Reason','Csv','UpdatedOn')
+    $headers = @('Customer','RxOfficeName','File','DateRange','Frequency','Status','Reason','Csv','UpdatedOn')
     for ($c=0; $c -lt $headers.Count; $c++) { $ws.Cells.Item(1,$c+1) = $headers[$c]; $ws.Cells.Item(1,$c+1).Font.Bold = $true }
     $r = 2
     foreach ($row in $rows) {
       $ws.Cells.Item($r,1) = [string]$row.Customer
-      $ws.Cells.Item($r,2) = [string]$row.File
-      $ws.Cells.Item($r,3) = [string]$row.DateRange
-      $ws.Cells.Item($r,4) = [string]$row.Frequency
-      $ws.Cells.Item($r,5) = [string]$row.Status
-      $ws.Cells.Item($r,6) = [string]$row.Reason
-      $ws.Cells.Item($r,7) = [string]$row.Csv
-      $ws.Cells.Item($r,8) = [string]$row.UpdatedOn
+      $ws.Cells.Item($r,2) = [string]$row.RxOfficeName
+      $ws.Cells.Item($r,3) = [string]$row.File
+      $ws.Cells.Item($r,4) = [string]$row.DateRange
+      $ws.Cells.Item($r,5) = [string]$row.Frequency
+      $ws.Cells.Item($r,6) = [string]$row.Status
+      $ws.Cells.Item($r,7) = [string]$row.Reason
+      $ws.Cells.Item($r,8) = [string]$row.Csv
+      $ws.Cells.Item($r,9) = [string]$row.UpdatedOn
       switch ($row.Status) {
-        'DONE'    { $ws.Cells.Item($r,5).Interior.Color = 0x90EE90 }  # light green
-        'ERROR'   { $ws.Cells.Item($r,5).Interior.Color = 0x9090FF }  # light red (BGR)
-        'SKIPPED' { $ws.Cells.Item($r,5).Interior.Color = 0xE0E0E0 }  # grey
+        'DONE'    { $ws.Cells.Item($r,6).Interior.Color = 0x90EE90 }  # light green
+        'ERROR'   { $ws.Cells.Item($r,6).Interior.Color = 0x9090FF }  # light red (BGR)
+        'SKIPPED' { $ws.Cells.Item($r,6).Interior.Color = 0xE0E0E0 }  # grey
       }
       $r++
     }
-    $ws.Columns.Item("A:H").AutoFit() | Out-Null
+    $ws.Columns.Item("A:I").AutoFit() | Out-Null
     try { $ws.Application.ActiveWindow.SplitRow = 1; $ws.Application.ActiveWindow.FreezePanes = $true } catch {}
     if (Test-Path -LiteralPath $logXlsx) { Remove-Item -LiteralPath $logXlsx -Force -ErrorAction SilentlyContinue }
     $wb.SaveAs($logXlsx, 51)   # 51 = .xlsx
@@ -670,7 +905,23 @@ if (-not $SourceFolder) { Write-Host "No folder selected. Exiting."; return }
 if (-not (Test-Path -LiteralPath $SourceFolder)) { Write-Host "Folder not found: $SourceFolder"; return }
 $SourceFolder = (Resolve-Path -LiteralPath $SourceFolder).Path
 
-# ---- 2) Must be logged in to Accounting ----
+# ---- 2) Choose which Accounting window to drive, then confirm it's logged in ----
+$acct = Choose-Acct
+if (-not $acct) {
+  if (@(Get-AcctCandidates).Count -eq 0) {
+    Show-Message "Accounting is not open.`n`nPlease open Accounting.exe and log in (user hfabros), then run this again."
+  }
+  Write-Host "No Accounting window selected. Exiting." -ForegroundColor Red; return
+}
+Write-Host ("Accounting        : PID {0}  {1}" -f $acct.Pid, $acct.Title)
+
+# Elevation/UAC mismatch: can't automate an elevated app from a normal one.
+if (Test-ElevationMismatch) {
+  Write-Host "`nELEVATION MISMATCH:`n$ElevationHelp" -ForegroundColor Red
+  Show-Message $ElevationHelp
+  return
+}
+
 if (-not (Assert-AcctLoggedIn)) { Write-Host "Not logged in to Accounting. Exiting." -ForegroundColor Red; return }
 
 # ---- 3) Output folder (separate from the AR data). Override: SOA_OUT ----
@@ -684,12 +935,12 @@ if ($env:SOA_OUT) {
 New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
 New-Item -ItemType Directory -Force -Path $ShotDir      | Out-Null
 
-# ---- 4) Reference CSV for frequencies (the file exported from Contact) ----
+# ---- 4) Reference CSV (RxOffice/Contact export): gives the customer NAME to type
+#         in Accounting AND the frequency, matched from each .xls customer name. ----
 if     ($env:SOA_REF)     { $refPath = $env:SOA_REF }
 elseif ($env:SOA_FREQCSV) { $refPath = $env:SOA_FREQCSV }
-else   { $refPath = Browse-File "Select the Customer CSV exported from Contact (frequency reference)" }
-$ref     = Load-FreqTable $refPath
-$FreqMap = $ref.Map
+else   { $refPath = Browse-File "Select the reference CSV (RxOffice export: Name + StatementFrequency)" }
+$ref = Load-Reference $refPath
 
 # ---- 5) Load the persistent run log (for resume) ----
 $logCsv  = Join-Path $OutputFolder '_SOA_Log.csv'
@@ -699,7 +950,7 @@ $alreadyDone = @($log.Values | Where-Object { $_.Status -eq 'DONE' }).Count
 
 Write-Host "Input (AR data)  : $SourceFolder"
 Write-Host "Output (CSV)     : $OutputFolder"
-Write-Host "Frequency ref    : $($ref.Source)  ($($FreqMap.Count) names)"
+Write-Host "Reference        : $($ref.Source)  ($($ref.ByKey.Count) names)"
 Write-Host "Log (resume from): $logCsv  ($alreadyDone already DONE)"
 Write-Host "Fallback order   : $($FrequencyOrder -join ' -> ')`n"
 
@@ -717,7 +968,7 @@ foreach ($xls in $xlsFiles) {
   if ($isDone -and -not $Overwrite) {
     Write-Host ("SKIP (already extracted): {0}" -f $xls.Name) -ForegroundColor DarkGray
     if (-not $prior) {
-      $log[$xls.Name] = [pscustomobject]@{ Customer=$base; File=$xls.Name; DateRange=''; Frequency=''
+      $log[$xls.Name] = [pscustomobject]@{ Customer=$base; RxOfficeName=''; File=$xls.Name; DateRange=''; Frequency=''
         Status='DONE'; Reason='CSV already present in output folder'; Csv=(Split-Path $csvPath -Leaf); UpdatedOn=$stamp }
     }
     continue
@@ -726,26 +977,35 @@ foreach ($xls in $xlsFiles) {
   try { $meta = Read-XlsMeta $xls.FullName }
   catch {
     Write-Host ("META FAIL {0}: {1}" -f $xls.Name,$_.Exception.Message) -ForegroundColor Red
-    $log[$xls.Name] = [pscustomobject]@{ Customer=''; File=$xls.Name; DateRange=''; Frequency=''
+    $log[$xls.Name] = [pscustomobject]@{ Customer=''; RxOfficeName=''; File=$xls.Name; DateRange=''; Frequency=''
       Status='ERROR'; Reason=(Explain 'meta-error' '')[1]; Csv=''; UpdatedOn=$stamp }
     continue
   }
 
   $range = "{0}..{1}" -f $meta.From, $meta.To
-  $r = Resolve-Frequency $meta.Customer $FreqMap
-  $known = $r.Freq
+
+  # Match the .xls (AR) customer to the reference: get the RxOffice NAME to type
+  # in Accounting and the frequency. Fall back to the raw .xls name if unmatched.
+  $r = Resolve-Reference $meta.Customer $ref
+  $known   = $r.Freq
+  # Type the matched RxOffice name (exact / normalized / word-prefix). Matching is
+  # precise (>=2-word prefix), so this is the canonical name Accounting expects
+  # (e.g. AR "ABALOS GUILLERMO OPTICAL" -> types "ABALOS GUILLERMO"). Only when there
+  # is NO reference match do we fall back to typing the raw .xls name.
+  $custName = if ($r.Name) { $r.Name } else { $meta.Customer }
   if ($known) { $tryOrder = @($known) + ($FrequencyOrder | Where-Object { $_ -ne $known }) }
   else        { $tryOrder = $FrequencyOrder }
 
-  $freqTag = if ($known) { "freq=$known ($($r.Via))" } else { "freq=unknown -> will guess" }
-  Write-Host ("PROCESS: {0}  [{1}]  {2}  {3}" -f $xls.Name,$meta.Customer,$range,$freqTag) -ForegroundColor Cyan
+  $nameTag = if ($r.Via -eq 'exact' -or $r.Via -eq 'normalized') { " -> ref '$custName'" } elseif ($r.Name) { " -> $($r.Via)" } else { " (no ref match; raw name)" }
+  $freqTag = if ($known) { "freq=$known" } else { "freq=unknown -> guess" }
+  Write-Host ("PROCESS: {0}  [{1}]{2}  {3}  {4}" -f $xls.Name,$meta.Customer,$nameTag,$range,$freqTag) -ForegroundColor Cyan
 
   $status='no-data'; $usedFreq=''
   foreach ($freq in $tryOrder) {
     try {
       Reset-State
       Open-StatementDialog | Out-Null
-      Set-Customer $meta.Customer
+      Set-Customer $custName          # <-- type the RxOffice name from the reference
       if ($freq -ne 'Monthly') { Set-Frequency $freq }
       Set-DateField 'From' $meta.From; Set-DateField 'To' $meta.To
       Shot ("{0}_{1}_form" -f $base,$freq); Click-OK; Start-Sleep -Seconds 5
@@ -762,8 +1022,9 @@ foreach ($xls in $xlsFiles) {
 
   $ex = Explain $status $usedFreq          # -> @(SUCCESS|FAILED|SKIPPED, reason)
   $logStatus = switch ($ex[0]) { 'SUCCESS' {'DONE'} 'SKIPPED' {'SKIPPED'} default {'ERROR'} }
-  $reason = if ($known -and $logStatus -eq 'DONE') { "$($ex[1]); frequency from reference ($($r.Via))" } else { $ex[1] }
-  $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
+  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed RxOffice name '$custName' (match: $($r.Via))" }
+            else { $ex[1] }
+  $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; RxOfficeName=$custName; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
     Status=$logStatus; Reason=$reason; Csv=$(if ($logStatus -eq 'DONE') { Split-Path $csvPath -Leaf } else { '' }); UpdatedOn=$stamp }
 
   $did++; $processed++

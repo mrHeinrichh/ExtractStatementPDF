@@ -11,9 +11,19 @@ statements not yet extracted.
    `Customer.csv` in your Documents). That file contains every customer's **Name**
    and **StatementFrequency** — it's the frequency reference.
 2. **Run SOA-Extractor.exe.** It asks for:
-   - the folder of `.xls` files (your AR data), then
+   - the folder of `.xls` files (your AR data),
+   - **which Accounting window to use** (if more than one is open — a picker lists each
+     PID, title and exe path), then
    - the **reference CSV** you exported in step 1 (the browse dialog opens in Documents).
 3. It extracts each statement with the customer's correct frequency and logs everything.
+
+### If it says "Accounting Print pane not found"
+The chosen Accounting window must be **logged in** and the tool navigates it to
+**General → Accounting Print** itself. The pane is located relative to *that* window,
+so a second-monitor / repositioned window is fine now. If it still can't find it, the
+error prints the window rectangle, the left-column labels and the custom panes it *did*
+see — send me that text and I can pinpoint the difference on that PC (e.g. a different
+Accounting version with different control names).
 
 ## Requirements
 
@@ -37,11 +47,19 @@ Monthly → Daily → Weekly → Bi-Weekly.
 
 ## Reference CSV formats accepted
 
-- **Contact "Export" file** — UTF‑16, tab-delimited, with `Name`, `Alias` and
-  `StatementFrequency` columns (both Name and Alias are matched).
-- **Simple `Customer,Frequency` CSV** — e.g. an older CustomerFrequency export.
+- **RxOffice + ARName** (preferred) — comma CSV with
+  `Id,Code,RxOfficeName,StatementFrequency,ARName`. `ARName` is your AR-side alias
+  (e.g. `AbalosGuillermoOptical`); the tool types the row's `RxOfficeName`.
+- **RxOffice export** — comma CSV with `Id,Code,Name,StatementFrequency`.
+- **Contact "Export" file** — UTF‑16, tab-delimited, with `Name`, `Alias`, `StatementFrequency`.
+- **Simple `Customer,Frequency` CSV**.
 
-The tool auto-detects which format the file is.
+The tool auto-detects the format. It matches your `.xls` customer name to a row and
+types that row's RxOffice name into Accounting, in this order:
+**exact** → **ARName alias** (case/space/punctuation-insensitive, so
+`AbalosGuillermoOptical` = `ABALOS GUILLERMO OPTICAL` → types `ABALOS GUILLERMO`) →
+**word-prefix**. If nothing matches, it types the raw `.xls` name and guesses the
+frequency. The name actually typed is recorded in the log's `RxOfficeName` column.
 
 ## Output  (folder: `<your folder> - SOA CSV`)
 
@@ -94,8 +112,9 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `01-Settings.ps1` | Fallback frequency order, `$Overwrite`, screenshot dir |
 | `02-Interop.ps1` | Win32 P/Invoke + UI Automation shortcut (`$AE`) |
 | `03-Ui-Dialogs.ps1` | Message box + open-file (browse) dialog |
+| `04-Choose-Acct.ps1` | **Chooser** — lists running Accounting windows (PID + title + path) and remembers which one to drive |
 | `10-Pick-Folder.ps1` | The paste-a-path (AR folder) dialog |
-| `11-Get-Acct.ps1` / `12-Focus-Acct.ps1` | Locate + maximize Accounting.exe |
+| `11-Get-Acct.ps1` / `12-Focus-Acct.ps1` | Locate (the chosen) + maximize Accounting.exe |
 | `13-Reset-State.ps1` | Close leftover Report/dialog before each customer |
 | `14-Click.ps1` / `15-Send.ps1` / `16-Send-Literal.ps1` / `17-Shot.ps1` | Mouse / keyboard / screenshot helpers |
 | `18-Assert-Login.ps1` | **Login check** — warns if Accounting isn't open/logged in |
@@ -110,9 +129,9 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `40-Get-ReportWindow.ps1` / `41-Close-Report.ps1` | Find / close the Report viewer |
 | `42-Export-Csv-FromReport.ps1` | Export report → CSV via the Save As dialog |
 | `50-KeyOf.ps1` | Normalize a name for matching |
-| `51-Load-FreqTable.ps1` | Load the reference CSV (Contact export or simple) |
+| `51-Load-Reference.ps1` | Load the reference (RxOffice / Contact export / simple) → name + frequency |
 | `52-Explain.ps1` | Map internal status → Result + human reason |
-| `53-Resolve-Frequency.ps1` | Look a customer's frequency up (exact + fuzzy) |
+| `53-Resolve-Reference.ps1` | Look a customer up → canonical name + frequency (exact + fuzzy) |
 | `60-Log-Load.ps1` / `61-Log-Save.ps1` | Load / save the resumable run log (CSV + Excel) |
 | `99-Main.ps1` | Program body: login check, browse reference, loop, resume, log |
 

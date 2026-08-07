@@ -6,11 +6,16 @@ suite, with each customer billed at its correct **Invoice Frequency**.
 ```
 RxCore-Tools/
 ├─ README.md                      ← you are here
-├─ SOA-Extractor/                 ← the main tool
+├─ SOA-Extractor/                 ← the main tool (extracts the SOA CSVs)
 │  ├─ SOA-Extractor.exe
 │  ├─ README.md
 │  ├─ build.ps1
 │  └─ src/                        (one .ps1 per function)
+├─ Customer-Matcher/              ← annotate the Customer export with matched names
+│  ├─ Customer-Matcher.exe
+│  ├─ README.md
+│  ├─ build.ps1
+│  └─ src/
 └─ Contact-Frequency-Lookup/      ← optional / legacy (see note below)
    ├─ Contact-Frequency-Lookup.exe
    ├─ README.md
@@ -49,6 +54,14 @@ SOA-Extractor keeps a log (`_SOA_Log.xlsx` / `_SOA_Log.csv`) in the output folde
 saves it after every file. Re-running skips everything already **DONE** and only
 does the rest, so you can stop/restart freely. Failed rows are marked **ERROR** with
 the reason and are retried next run.
+
+## Customer-Matcher (optional cross-reference)
+
+Want to see, inside the Customer export, which SOA `.xls` matched each customer?
+Run **Customer-Matcher.exe** — pick the `.xls` folder and the exported Customer file,
+and it adds a **`MatchedXlsName`** column right after `Name` **in that file itself**
+(idempotent; close it in Excel first). Pure data, no apps need to be open. See its
+README for details.
 
 ## About Contact-Frequency-Lookup (legacy)
 

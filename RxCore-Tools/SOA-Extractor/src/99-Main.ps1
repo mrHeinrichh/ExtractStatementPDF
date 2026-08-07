@@ -9,7 +9,23 @@ if (-not $SourceFolder) { Write-Host "No folder selected. Exiting."; return }
 if (-not (Test-Path -LiteralPath $SourceFolder)) { Write-Host "Folder not found: $SourceFolder"; return }
 $SourceFolder = (Resolve-Path -LiteralPath $SourceFolder).Path
 
-# ---- 2) Must be logged in to Accounting ----
+# ---- 2) Choose which Accounting window to drive, then confirm it's logged in ----
+$acct = Choose-Acct
+if (-not $acct) {
+  if (@(Get-AcctCandidates).Count -eq 0) {
+    Show-Message "Accounting is not open.`n`nPlease open Accounting.exe and log in (user hfabros), then run this again."
+  }
+  Write-Host "No Accounting window selected. Exiting." -ForegroundColor Red; return
+}
+Write-Host ("Accounting        : PID {0}  {1}" -f $acct.Pid, $acct.Title)
+
+# Elevation/UAC mismatch: can't automate an elevated app from a normal one.
+if (Test-ElevationMismatch) {
+  Write-Host "`nELEVATION MISMATCH:`n$ElevationHelp" -ForegroundColor Red
+  Show-Message $ElevationHelp
+  return
+}
+
 if (-not (Assert-AcctLoggedIn)) { Write-Host "Not logged in to Accounting. Exiting." -ForegroundColor Red; return }
 
 # ---- 3) Output folder (separate from the AR data). Override: SOA_OUT ----
@@ -23,12 +39,12 @@ if ($env:SOA_OUT) {
 New-Item -ItemType Directory -Force -Path $OutputFolder | Out-Null
 New-Item -ItemType Directory -Force -Path $ShotDir      | Out-Null
 
-# ---- 4) Reference CSV for frequencies (the file exported from Contact) ----
+# ---- 4) Reference CSV (RxOffice/Contact export): gives the customer NAME to type
+#         in Accounting AND the frequency, matched from each .xls customer name. ----
 if     ($env:SOA_REF)     { $refPath = $env:SOA_REF }
 elseif ($env:SOA_FREQCSV) { $refPath = $env:SOA_FREQCSV }
-else   { $refPath = Browse-File "Select the Customer CSV exported from Contact (frequency reference)" }
-$ref     = Load-FreqTable $refPath
-$FreqMap = $ref.Map
+else   { $refPath = Browse-File "Select the reference CSV (RxOffice export: Name + StatementFrequency)" }
+$ref = Load-Reference $refPath
 
 # ---- 5) Load the persistent run log (for resume) ----
 $logCsv  = Join-Path $OutputFolder '_SOA_Log.csv'
@@ -38,7 +54,7 @@ $alreadyDone = @($log.Values | Where-Object { $_.Status -eq 'DONE' }).Count
 
 Write-Host "Input (AR data)  : $SourceFolder"
 Write-Host "Output (CSV)     : $OutputFolder"
-Write-Host "Frequency ref    : $($ref.Source)  ($($FreqMap.Count) names)"
+Write-Host "Reference        : $($ref.Source)  ($($ref.ByKey.Count) names)"
 Write-Host "Log (resume from): $logCsv  ($alreadyDone already DONE)"
 Write-Host "Fallback order   : $($FrequencyOrder -join ' -> ')`n"
 
@@ -56,7 +72,7 @@ foreach ($xls in $xlsFiles) {
   if ($isDone -and -not $Overwrite) {
     Write-Host ("SKIP (already extracted): {0}" -f $xls.Name) -ForegroundColor DarkGray
     if (-not $prior) {
-      $log[$xls.Name] = [pscustomobject]@{ Customer=$base; File=$xls.Name; DateRange=''; Frequency=''
+      $log[$xls.Name] = [pscustomobject]@{ Customer=$base; RxOfficeName=''; File=$xls.Name; DateRange=''; Frequency=''
         Status='DONE'; Reason='CSV already present in output folder'; Csv=(Split-Path $csvPath -Leaf); UpdatedOn=$stamp }
     }
     continue
@@ -65,26 +81,35 @@ foreach ($xls in $xlsFiles) {
   try { $meta = Read-XlsMeta $xls.FullName }
   catch {
     Write-Host ("META FAIL {0}: {1}" -f $xls.Name,$_.Exception.Message) -ForegroundColor Red
-    $log[$xls.Name] = [pscustomobject]@{ Customer=''; File=$xls.Name; DateRange=''; Frequency=''
+    $log[$xls.Name] = [pscustomobject]@{ Customer=''; RxOfficeName=''; File=$xls.Name; DateRange=''; Frequency=''
       Status='ERROR'; Reason=(Explain 'meta-error' '')[1]; Csv=''; UpdatedOn=$stamp }
     continue
   }
 
   $range = "{0}..{1}" -f $meta.From, $meta.To
-  $r = Resolve-Frequency $meta.Customer $FreqMap
-  $known = $r.Freq
+
+  # Match the .xls (AR) customer to the reference: get the RxOffice NAME to type
+  # in Accounting and the frequency. Fall back to the raw .xls name if unmatched.
+  $r = Resolve-Reference $meta.Customer $ref
+  $known   = $r.Freq
+  # Type the matched RxOffice name (exact / normalized / word-prefix). Matching is
+  # precise (>=2-word prefix), so this is the canonical name Accounting expects
+  # (e.g. AR "ABALOS GUILLERMO OPTICAL" -> types "ABALOS GUILLERMO"). Only when there
+  # is NO reference match do we fall back to typing the raw .xls name.
+  $custName = if ($r.Name) { $r.Name } else { $meta.Customer }
   if ($known) { $tryOrder = @($known) + ($FrequencyOrder | Where-Object { $_ -ne $known }) }
   else        { $tryOrder = $FrequencyOrder }
 
-  $freqTag = if ($known) { "freq=$known ($($r.Via))" } else { "freq=unknown -> will guess" }
-  Write-Host ("PROCESS: {0}  [{1}]  {2}  {3}" -f $xls.Name,$meta.Customer,$range,$freqTag) -ForegroundColor Cyan
+  $nameTag = if ($r.Via -eq 'exact' -or $r.Via -eq 'normalized') { " -> ref '$custName'" } elseif ($r.Name) { " -> $($r.Via)" } else { " (no ref match; raw name)" }
+  $freqTag = if ($known) { "freq=$known" } else { "freq=unknown -> guess" }
+  Write-Host ("PROCESS: {0}  [{1}]{2}  {3}  {4}" -f $xls.Name,$meta.Customer,$nameTag,$range,$freqTag) -ForegroundColor Cyan
 
   $status='no-data'; $usedFreq=''
   foreach ($freq in $tryOrder) {
     try {
       Reset-State
       Open-StatementDialog | Out-Null
-      Set-Customer $meta.Customer
+      Set-Customer $custName          # <-- type the RxOffice name from the reference
       if ($freq -ne 'Monthly') { Set-Frequency $freq }
       Set-DateField 'From' $meta.From; Set-DateField 'To' $meta.To
       Shot ("{0}_{1}_form" -f $base,$freq); Click-OK; Start-Sleep -Seconds 5
@@ -101,8 +126,9 @@ foreach ($xls in $xlsFiles) {
 
   $ex = Explain $status $usedFreq          # -> @(SUCCESS|FAILED|SKIPPED, reason)
   $logStatus = switch ($ex[0]) { 'SUCCESS' {'DONE'} 'SKIPPED' {'SKIPPED'} default {'ERROR'} }
-  $reason = if ($known -and $logStatus -eq 'DONE') { "$($ex[1]); frequency from reference ($($r.Via))" } else { $ex[1] }
-  $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
+  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed RxOffice name '$custName' (match: $($r.Via))" }
+            else { $ex[1] }
+  $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; RxOfficeName=$custName; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
     Status=$logStatus; Reason=$reason; Csv=$(if ($logStatus -eq 'DONE') { Split-Path $csvPath -Leaf } else { '' }); UpdatedOn=$stamp }
 
   $did++; $processed++

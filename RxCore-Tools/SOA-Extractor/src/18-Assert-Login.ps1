@@ -8,25 +8,24 @@
 #
 # Shows a message box and returns $false if not ready; otherwise $true.
 
+# Titles of every top-level window of the CHOSEN Accounting process (via Get-Acct).
 function Get-AcctWindowTitles {
-  $procs = Get-Process Accounting -ErrorAction SilentlyContinue
-  if (-not $procs) { return @() }
+  $proc = $null
+  try { $proc = Get-Acct } catch { return @() }
   $titles = New-Object System.Collections.Generic.List[string]
   $desktop = $AE::RootElement
-  foreach ($proc in $procs) {
-    try {
-      $cond = New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, [int]$proc.Id)
-      $wins = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
-      foreach ($w in $wins) { $titles.Add([string]$w.Current.Name) }
-    } catch {}
-    if ($proc.MainWindowTitle) { $titles.Add([string]$proc.MainWindowTitle) }
-  }
+  try {
+    $cond = New-Object System.Windows.Automation.PropertyCondition($AE::ProcessIdProperty, [int]$proc.Id)
+    $wins = $desktop.FindAll([System.Windows.Automation.TreeScope]::Children, $cond)
+    foreach ($w in $wins) { $titles.Add([string]$w.Current.Name) }
+  } catch {}
+  if ($proc.MainWindowTitle) { $titles.Add([string]$proc.MainWindowTitle) }
   return $titles
 }
 
 function Assert-AcctLoggedIn {
-  $procs = Get-Process Accounting -ErrorAction SilentlyContinue
-  if (-not $procs) {
+  $running = Get-Process Accounting -ErrorAction SilentlyContinue
+  if (-not $running -and -not $script:AcctPid) {
     Show-Message "Accounting is not open.`n`nPlease open Accounting.exe and log in (user hfabros), then run this again."
     return $false
   }
