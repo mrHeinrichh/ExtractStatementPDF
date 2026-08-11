@@ -23,7 +23,7 @@ namespace ExtractStatementPDF.Consolidation
         private ConsolidatedStatementExcel _excelGenerator = new ConsolidatedStatementExcel();
 
         public BatchProcesingEngine() { }
-       
+
         public void Verify(string directory)
         {
             var directoryInfo = new DirectoryInfo(directory);
@@ -79,6 +79,7 @@ namespace ExtractStatementPDF.Consolidation
                 {
                     case ".pdf":
                     case ".xls":
+                    case ".ods":
                         arCopies.Add(file);
                         break;
                     case ".csv":
@@ -91,7 +92,7 @@ namespace ExtractStatementPDF.Consolidation
 
             foreach (var match in matches)
             {
-                if (match.ArFiles.Count() > 0)
+                if (match.ArFiles.Any() && match.CsvFiles.Any())
                 {
                     MoveFilesTo(match.CsvFiles, match.ArFiles, matchedDirectory);
                 }
@@ -213,7 +214,7 @@ namespace ExtractStatementPDF.Consolidation
         {
             var filenames = new List<FileInfo>().Concat(arCopies).Concat(csvs);
             var lookupKeys = filenames.Select(t => BuildLookupKey(t.FullName)).Distinct().Order();
-            
+
             var matches = new List<FileMatchResult>();
 
             foreach (var lookupKey in lookupKeys)
