@@ -3,7 +3,9 @@ using ExtractStatementPDF.Models;
 using OfficeOpenXml;
 using System.Diagnostics;
 using System.Globalization;
+using System.IO.Compression;
 using System.Text.RegularExpressions;
+using System.Xml.Linq;
 
 namespace ExtractStatementPDF.AR
 {
@@ -18,7 +20,7 @@ namespace ExtractStatementPDF.AR
         public ARStatement Extract(IEnumerable<string> filenames)
         {
             var arStatement = new ARStatement(filenames);
-            
+
             foreach (var filename in filenames)
             {
                 var lines = GetWorksheetLines(filename);
@@ -55,7 +57,7 @@ namespace ExtractStatementPDF.AR
             return arOrders;
         }
 
-        
+
         private static AROrder? ParseLine(string line)
         {
             var pattern = @"(\d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2})\s+([A-Za-z\d]+)\s+([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)";
@@ -82,6 +84,7 @@ namespace ExtractStatementPDF.AR
             {
                 return Path.GetExtension(filename).ToLowerInvariant() switch
                 {
+                    ".ods" => GetOdsWorksheetLines(filename),
                     ".xlsx" => GetOpenXmlWorksheetLines(filename),
                     ".xls" => GetLegacyWorksheetLines(filename),
                     _ => [],
@@ -113,6 +116,64 @@ namespace ExtractStatementPDF.AR
                     .Select(column => worksheet.Cells[row, column].Text.Trim())
                     .Where(value => !string.IsNullOrWhiteSpace(value))
                     .ToList();
+
+                if (values.Count > 0)
+                {
+                    lines.Add(string.Join(" ", values));
+                }
+            }
+
+            return lines;
+        }
+
+        private static List<string> GetOdsWorksheetLines(string filename)
+        {
+            using var archive = ZipFile.OpenRead(filename);
+            var entry = archive.GetEntry("content.xml");
+            if (entry == null)
+            {
+                return new List<string>();
+            }
+
+            using var stream = entry.Open();
+            var document = XDocument.Load(stream);
+            var tableNs = XNamespace.Get("urn:oasis:names:tc:opendocument:xmlns:table:1.0");
+            var officeNs = XNamespace.Get("urn:oasis:names:tc:opendocument:xmlns:office:1.0");
+            var textNs = XNamespace.Get("urn:oasis:names:tc:opendocument:xmlns:text:1.0");
+
+            var table = document.Descendants(tableNs + "table").FirstOrDefault();
+            if (table == null)
+            {
+                return new List<string>();
+            }
+
+            var lines = new List<string>();
+
+            foreach (var rowElement in table.Elements(tableNs + "table-row"))
+            {
+                var values = new List<string>();
+
+                foreach (var cellElement in rowElement.Elements(tableNs + "table-cell"))
+                {
+                    var valueType = (string?)cellElement.Attribute(officeNs + "value-type");
+
+                    if (valueType == "date")
+                    {
+                        var dateValue = (string?)cellElement.Attribute(officeNs + "date-value");
+                        if (dateValue != null && DateTime.TryParse(dateValue, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+                        {
+                            values.Add(date.ToString("dd-MMM-yy", CultureInfo.InvariantCulture));
+                        }
+                    }
+                    else
+                    {
+                        var text = string.Concat(cellElement.Descendants(textNs + "p").Select(p => p.Value)).Trim();
+                        if (!string.IsNullOrWhiteSpace(text))
+                        {
+                            values.Add(text);
+                        }
+                    }
+                }
 
                 if (values.Count > 0)
                 {

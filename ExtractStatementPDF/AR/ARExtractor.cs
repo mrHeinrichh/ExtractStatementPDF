@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace ExtractStatementPDF.AR
+﻿namespace ExtractStatementPDF.AR
 {
     public class ARExtractor
     {
@@ -31,7 +25,8 @@ namespace ExtractStatementPDF.AR
             var excelFiles = candidates
                 .Where(t =>
                     string.Equals(Path.GetExtension(t), ".xlsx", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(Path.GetExtension(t), ".xls", StringComparison.OrdinalIgnoreCase))
+                    string.Equals(Path.GetExtension(t), ".xls", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(Path.GetExtension(t), ".ods", StringComparison.OrdinalIgnoreCase))
                 .ToList();
 
             if (excelFiles.Count > 0)
