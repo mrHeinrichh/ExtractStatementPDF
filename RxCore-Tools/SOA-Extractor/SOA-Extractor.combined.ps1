@@ -554,12 +554,13 @@ function Field-XY([string]$name) {
 
 
 # ===================== src\33-Set-Customer.ps1 =====================
-# Set-Customer : type the customer name into the Customers box, wait for the
-# autocomplete suggestion, then press TAB to commit it (binds "SOA-#|NAME").
-function Set-Customer([string]$name) {
+# Set-Customer : type the customer id (falls back to name when no id is available) into
+# the Customers box, wait for the autocomplete suggestion, then press TAB to commit it
+# (binds "SOA-#|NAME").
+function Set-Customer([string]$idOrName) {
   $xy = Field-XY 'Customers'; Click $xy[0] $xy[1]; Start-Sleep -Milliseconds 250
   Send '^a'; Start-Sleep -Milliseconds 80; Send '{DEL}'; Start-Sleep -Milliseconds 150
-  Send-Literal $name; Start-Sleep -Milliseconds 1500; Send '{TAB}'; Start-Sleep -Milliseconds 500
+  Send-Literal $idOrName; Start-Sleep -Milliseconds 1500; Send '{TAB}'; Start-Sleep -Milliseconds 500
 }
 
 
@@ -699,19 +700,69 @@ function Export-Csv-FromReport([string]$targetCsv) {
 function KeyOf([string]$s) { return ($s -replace '\s+',' ').Trim().ToUpperInvariant() }
 
 
+# ===================== src\51-Load-FreqTable.ps1 =====================
+# Load-FreqTable : read a reference CSV into a hashtable  KeyOf(name) -> frequency.
+# Supports two formats automatically:
+#   1) Contact.exe "Export" file  - UTF-16, TAB-delimited, many columns incl.
+#      "Name", "Alias" and "StatementFrequency". Both Name and Alias are mapped
+#      so an .xls customer name matches whichever Contact used.
+#   2) Simple 2-column CSV         - "Customer","Frequency" (UTF-8), e.g. an older
+#      CustomerFrequency export.
+# Returns @{ Map = <hashtable>; Source = <path or '(none)'> }.
+function Load-FreqTable([string]$path) {
+  $map = @{}
+  if (-not $path -or -not (Test-Path -LiteralPath $path)) { return @{ Map=$map; Source='(none)' } }
+
+  # Detect encoding from the byte-order mark.
+  $bytes = [System.IO.File]::ReadAllBytes($path)
+  $enc = [System.Text.Encoding]::UTF8
+  if     ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) { $enc = [System.Text.Encoding]::Unicode }           # UTF-16 LE
+  elseif ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) { $enc = [System.Text.Encoding]::BigEndianUnicode }   # UTF-16 BE
+  $text  = $enc.GetString($bytes)
+  $lines = $text -split "\r?\n"
+  if ($lines.Count -lt 2) { return @{ Map=$map; Source=$path } }
+
+  $header = $lines[0]
+  if ($header -match 'StatementFrequency' -and $header.Contains("`t")) {
+    # ---- Contact export (tab-delimited) ----
+    $hdr   = $header.Split("`t") | ForEach-Object { $_.Trim().Trim('"') }
+    $iName = [Array]::IndexOf($hdr, 'Name')
+    $iAli  = [Array]::IndexOf($hdr, 'Alias')
+    $iFreq = [Array]::IndexOf($hdr, 'StatementFrequency')
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+      if (-not $lines[$i].Trim()) { continue }
+      $c = $lines[$i].Split("`t") | ForEach-Object { $_.Trim().Trim('"') }
+      if ($iFreq -lt 0 -or $iFreq -ge $c.Count) { continue }
+      $f = $c[$iFreq]; if (-not $f) { continue }
+      if ($iName -ge 0 -and $iName -lt $c.Count) { $k = KeyOf $c[$iName]; if ($k -and -not $map.ContainsKey($k)) { $map[$k] = $f } }
+      if ($iAli  -ge 0 -and $iAli  -lt $c.Count -and $c[$iAli]) { $k = KeyOf $c[$iAli]; if ($k -and -not $map.ContainsKey($k)) { $map[$k] = $f } }
+    }
+  } else {
+    # ---- Simple "Customer,Frequency" CSV ----
+    foreach ($row in (Import-Csv -LiteralPath $path -Encoding UTF8)) {
+      $k = KeyOf ([string]$row.Customer); $f = ([string]$row.Frequency).Trim()
+      if ($k -and $f -and -not $map.ContainsKey($k)) { $map[$k] = $f }
+    }
+  }
+  return @{ Map=$map; Source=$path }
+}
+
+
 # ===================== src\51-Load-Reference.ps1 =====================
 # Load-Reference : read the reference customer list into two lookups:
-#   ByKey   : KeyOf(RxOfficeName) -> @{ Name=<RxOffice name>; Freq; Tokens }  (exact + word-prefix)
-#   ByTight : TightKey(x)         -> @{ Name=<RxOffice name>; Freq }          (punctuation/spacing-
+#   ByKey   : KeyOf(RxOfficeName) -> @{ Name=<RxOffice name>; Freq; Tokens; Id }  (exact + word-prefix)
+#   ByTight : TightKey(x)         -> @{ Name=<RxOffice name>; Freq; Id }          (punctuation/spacing-
 #             insensitive; includes the RxOfficeName AND its ARName alias)
-# A match gives us BOTH the exact RxOffice name to type in Accounting and the frequency.
+# A match gives us the id to type in Accounting's Customers search box (falls back to the
+# RxOffice name when no id column is present), plus the frequency.
 #
 # Accepts:
 #   * RxOffice + ARName - comma CSV: Id,Code,RxOfficeName,StatementFrequency,ARName
-#                         (ARName is the AR file/customer alias, e.g. "AbalosGuillermoOptical")
+#                         (ARName is the AR file/customer alias, e.g. "AbalosGuillermoOptical";
+#                         Code, the 2nd column, is the id typed into the Customers search box)
 #   * RxOffice          - comma CSV: Id,Code,Name,StatementFrequency
-#   * Contact export    - UTF-16, TAB-delimited: Name / Alias / StatementFrequency
-#   * Simple            - comma CSV: Customer,Frequency
+#   * Contact export    - UTF-16, TAB-delimited: Name / Alias / StatementFrequency (no id column)
+#   * Simple            - comma CSV: Customer,Frequency (no id column)
 # Returns @{ ByKey=<hashtable>; ByTight=<hashtable>; Source=<path or '(none)'> }.
 function Load-Reference([string]$path) {
   $byKey = @{}; $byTight = @{}
@@ -731,9 +782,9 @@ function Load-Reference([string]$path) {
 
   # local helper: register one reference row
   $add = {
-    param($name, $freq, $alias)
+    param($name, $freq, $alias, $id)
     if (-not $name -or -not $freq) { return }
-    $entry = @{ Name=$name; Freq=$freq; Tokens=(Tokenize $name) }
+    $entry = @{ Name=$name; Freq=$freq; Tokens=(Tokenize $name); Id=$id }
     $k = KeyOf $name;   if ($k  -and -not $byKey.ContainsKey($k))   { $byKey[$k]  = $entry }
     $t = TightKey $name; if ($t -and -not $byTight.ContainsKey($t)) { $byTight[$t] = $entry }
     if ($alias) { $at = TightKey $alias; if ($at -and -not $byTight.ContainsKey($at)) { $byTight[$at] = $entry } }
@@ -749,7 +800,7 @@ function Load-Reference([string]$path) {
       if ($iFreq -lt 0 -or $iFreq -ge $c.Count) { continue }
       $nm = if ($iName -ge 0 -and $iName -lt $c.Count) { $c[$iName] } else { '' }
       $al = if ($iAli  -ge 0 -and $iAli  -lt $c.Count) { $c[$iAli]  } else { '' }
-      & $add $nm $c[$iFreq] $al
+      & $add $nm $c[$iFreq] $al ''
     }
   } else {
     # ---- comma CSV: RxOffice(+ARName) / RxOffice / simple ----
@@ -759,12 +810,14 @@ function Load-Reference([string]$path) {
       $nameCol = if ($cols -contains 'RxOfficeName') { 'RxOfficeName' } elseif ($cols -contains 'Name') { 'Name' } elseif ($cols -contains 'Customer') { 'Customer' } else { $null }
       $freqCol = if ($cols -contains 'StatementFrequency') { 'StatementFrequency' } elseif ($cols -contains 'Frequency') { 'Frequency' } else { $null }
       $aliasCol = if ($cols -contains 'ARName') { 'ARName' } else { $null }
+      $idCol = if ($cols -contains 'Code') { 'Code' } else { $null }
       if ($nameCol -and $freqCol) {
         foreach ($o in $objs) {
           $nm = ([string]$o.$nameCol).Trim()
           $f  = ([string]$o.$freqCol).Trim()
           $al = if ($aliasCol) { ([string]$o.$aliasCol).Trim() } else { '' }
-          & $add $nm $f $al
+          $id = if ($idCol) { ([string]$o.$idCol).Trim() } else { '' }
+          & $add $nm $f $al $id
         }
       }
     }
@@ -793,31 +846,53 @@ function Explain($status, $freq) {
 }
 
 
+# ===================== src\53-Resolve-Frequency.ps1 =====================
+# Resolve-Frequency : find a customer's frequency in the reference map.
+# Tries an exact (normalized) match first; if none, tries progressively shorter
+# forms of the name and takes the first table entry that CONTAINS that form.
+# Returns @{ Freq = <frequency or ''>; Via = 'exact' | <term used> | '' }.
+function Resolve-Frequency([string]$name, [hashtable]$map) {
+  if (-not $map -or $map.Count -eq 0) { return @{ Freq=''; Via='' } }
+  $k = KeyOf $name
+  if ($map.ContainsKey($k)) { return @{ Freq=$map[$k]; Via='exact' } }
+  foreach ($term in (Get-Candidates $name)) {
+    $tk = KeyOf $term
+    if (-not $tk) { continue }
+    $hit = $null
+    foreach ($key in $map.Keys) { if ($key.Contains($tk)) { $hit = $key; break } }
+    if ($hit) { return @{ Freq=$map[$hit]; Via=$term } }
+  }
+  return @{ Freq=''; Via='' }
+}
+
+
 # ===================== src\53-Resolve-Reference.ps1 =====================
 # Resolve-Reference : match an AR (.xls) customer name to a reference row and
-# return the RxOffice NAME to type in Accounting plus the frequency.
+# return the RxOffice NAME (for logging/reporting), the id to type into Accounting's
+# Customers search box (2nd/"Code" column of the reference CSV; empty if the reference
+# has no id column), and the frequency.
 #
 # Matching, most-precise first:
 #   1) exact         - normalized key equal to an RxOfficeName.
 #   2) tight / ARName - punctuation/spacing/case-insensitive equal to an RxOfficeName
 #                       OR its ARName alias. This is how "ABALOS GUILLERMO OPTICAL"
-#                       matches ARName "AbalosGuillermoOptical" -> types "ABALOS GUILLERMO".
+#                       matches ARName "AbalosGuillermoOptical" -> resolves to that row.
 #   3) word-prefix    - one name's words are the leading run of the other's (>= 2 words),
 #                       e.g. AR "FESAR ... GREENHILLS" <-> "FESAR ... GREENHILLS SHOPPING CENTER".
-# Returns @{ Name=<RxOffice name or ''>; Freq; Via='exact'|'ARname'|"ref '<name>'"|'' }.
+# Returns @{ Name=<RxOffice name or ''>; Id=<code or ''>; Freq; Via='exact'|'ARname'|"ref '<name>'"|'' }.
 function Resolve-Reference([string]$name, $ref) {
-  if (-not $ref) { return @{ Name=''; Freq=''; Via='' } }
+  if (-not $ref) { return @{ Name=''; Id=''; Freq=''; Via='' } }
   $byKey = $ref.ByKey; $byTight = $ref.ByTight
-  if (-not $byKey -or $byKey.Count -eq 0) { return @{ Name=''; Freq=''; Via='' } }
+  if (-not $byKey -or $byKey.Count -eq 0) { return @{ Name=''; Id=''; Freq=''; Via='' } }
 
   $k = KeyOf $name
-  if ($byKey.ContainsKey($k)) { $e = $byKey[$k]; return @{ Name=$e.Name; Freq=$e.Freq; Via='exact' } }
+  if ($byKey.ContainsKey($k)) { $e = $byKey[$k]; return @{ Name=$e.Name; Id=$e.Id; Freq=$e.Freq; Via='exact' } }
 
   $tk = TightKey $name
-  if ($byTight.ContainsKey($tk)) { $e = $byTight[$tk]; return @{ Name=$e.Name; Freq=$e.Freq; Via='ARname' } }
+  if ($byTight.ContainsKey($tk)) { $e = $byTight[$tk]; return @{ Name=$e.Name; Id=$e.Id; Freq=$e.Freq; Via='ARname' } }
 
   $ar = Tokenize $name
-  if ($ar.Count -eq 0) { return @{ Name=''; Freq=''; Via='' } }
+  if ($ar.Count -eq 0) { return @{ Name=''; Id=''; Freq=''; Via='' } }
   $best = $null; $bestScore = -1
   foreach ($e in $byKey.Values) {
     $t = $e.Tokens
@@ -827,8 +902,8 @@ function Resolve-Reference([string]$name, $ref) {
     elseif (Test-Prefix $ar $t) { if ($ar.Count -ge 2) { $score = ($ar.Count * 1000) - ($t.Count - $ar.Count) } }   # AR shorter
     if ($score -gt $bestScore) { $bestScore = $score; $best = $e }
   }
-  if ($best) { return @{ Name=$best.Name; Freq=$best.Freq; Via=("ref '{0}'" -f $best.Name) } }
-  return @{ Name=''; Freq=''; Via='' }
+  if ($best) { return @{ Name=$best.Name; Id=$best.Id; Freq=$best.Freq; Via=("ref '{0}'" -f $best.Name) } }
+  return @{ Name=''; Id=''; Freq=''; Via='' }
 }
 
 
@@ -993,6 +1068,9 @@ foreach ($xls in $xlsFiles) {
   # (e.g. AR "ABALOS GUILLERMO OPTICAL" -> types "ABALOS GUILLERMO"). Only when there
   # is NO reference match do we fall back to typing the raw .xls name.
   $custName = if ($r.Name) { $r.Name } else { $meta.Customer }
+  # Prefer searching by id (2nd/"Code" column of the reference CSV); fall back to the
+  # resolved RxOffice name, then the raw .xls name, when no id is available.
+  $searchInput = if ($r.Id) { $r.Id } elseif ($r.Name) { $r.Name } else { $meta.Customer }
   if ($known) { $tryOrder = @($known) + ($FrequencyOrder | Where-Object { $_ -ne $known }) }
   else        { $tryOrder = $FrequencyOrder }
 
@@ -1005,7 +1083,7 @@ foreach ($xls in $xlsFiles) {
     try {
       Reset-State
       Open-StatementDialog | Out-Null
-      Set-Customer $custName          # <-- type the RxOffice name from the reference
+      Set-Customer $searchInput       # <-- type the id from the reference (falls back to name)
       if ($freq -ne 'Monthly') { Set-Frequency $freq }
       Set-DateField 'From' $meta.From; Set-DateField 'To' $meta.To
       Shot ("{0}_{1}_form" -f $base,$freq); Click-OK; Start-Sleep -Seconds 5
@@ -1022,7 +1100,7 @@ foreach ($xls in $xlsFiles) {
 
   $ex = Explain $status $usedFreq          # -> @(SUCCESS|FAILED|SKIPPED, reason)
   $logStatus = switch ($ex[0]) { 'SUCCESS' {'DONE'} 'SKIPPED' {'SKIPPED'} default {'ERROR'} }
-  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed RxOffice name '$custName' (match: $($r.Via))" }
+  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed '$searchInput' (match: $($r.Via))" }
             else { $ex[1] }
   $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; RxOfficeName=$custName; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
     Status=$logStatus; Reason=$reason; Csv=$(if ($logStatus -eq 'DONE') { Split-Path $csvPath -Leaf } else { '' }); UpdatedOn=$stamp }

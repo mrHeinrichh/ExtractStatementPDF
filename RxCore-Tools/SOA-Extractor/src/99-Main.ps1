@@ -97,6 +97,9 @@ foreach ($xls in $xlsFiles) {
   # (e.g. AR "ABALOS GUILLERMO OPTICAL" -> types "ABALOS GUILLERMO"). Only when there
   # is NO reference match do we fall back to typing the raw .xls name.
   $custName = if ($r.Name) { $r.Name } else { $meta.Customer }
+  # Prefer searching by id (2nd/"Code" column of the reference CSV); fall back to the
+  # resolved RxOffice name, then the raw .xls name, when no id is available.
+  $searchInput = if ($r.Id) { $r.Id } elseif ($r.Name) { $r.Name } else { $meta.Customer }
   if ($known) { $tryOrder = @($known) + ($FrequencyOrder | Where-Object { $_ -ne $known }) }
   else        { $tryOrder = $FrequencyOrder }
 
@@ -109,7 +112,7 @@ foreach ($xls in $xlsFiles) {
     try {
       Reset-State
       Open-StatementDialog | Out-Null
-      Set-Customer $custName          # <-- type the RxOffice name from the reference
+      Set-Customer $searchInput       # <-- type the id from the reference (falls back to name)
       if ($freq -ne 'Monthly') { Set-Frequency $freq }
       Set-DateField 'From' $meta.From; Set-DateField 'To' $meta.To
       Shot ("{0}_{1}_form" -f $base,$freq); Click-OK; Start-Sleep -Seconds 5
@@ -126,7 +129,7 @@ foreach ($xls in $xlsFiles) {
 
   $ex = Explain $status $usedFreq          # -> @(SUCCESS|FAILED|SKIPPED, reason)
   $logStatus = switch ($ex[0]) { 'SUCCESS' {'DONE'} 'SKIPPED' {'SKIPPED'} default {'ERROR'} }
-  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed RxOffice name '$custName' (match: $($r.Via))" }
+  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed '$searchInput' (match: $($r.Via))" }
             else { $ex[1] }
   $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; RxOfficeName=$custName; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
     Status=$logStatus; Reason=$reason; Csv=$(if ($logStatus -eq 'DONE') { Split-Path $csvPath -Leaf } else { '' }); UpdatedOn=$stamp }
