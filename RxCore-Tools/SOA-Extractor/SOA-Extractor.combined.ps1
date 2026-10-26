@@ -39,6 +39,11 @@ $Overwrite = $false
 # Where per-step screenshots and the run log are written.
 $ShotDir = Join-Path $env:TEMP 'soa_shots'
 
+# Customers (ARName from the Customer Master Record) whose AR data is split into
+# <Name>_<MMyyyy>_P1 (whole month), _P2 (1-15) and _P3 (16-end of month).
+# RxOffice is extracted ONCE for the whole month as <Name>_<MMyyyy>.csv.
+$WholeMonthCustomers = @('CarlosSimpao', 'SimpaoTolentino')
+
 
 # ===================== src\02-Interop.ps1 =====================
 # ---- Win32 interop + UI Automation shortcuts ------------------------------
@@ -452,6 +457,24 @@ function Test-Prefix($short, $long) {
 function TightKey([string]$s) {
   if (-not $s) { return '' }
   return ($s -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
+}
+
+
+# ===================== src\24-Get-WholeMonthSplit.ps1 =====================
+# Get-WholeMonthSplit : for a whole-month customer's AR file name
+# (e.g. "CarlosSimpao_052026_P2"), return @{ Csv='CarlosSimpao_052026'; Part=2;
+# From='5/1/2026'; To='5/31/2026' } - the single whole-month CSV name and the
+# calendar month range. Returns $null for every other file.
+function Get-WholeMonthSplit([string]$base) {
+  if ($base -notmatch '^(?<name>[^_]+)_(?<mm>\d{2})(?<yyyy>\d{4})_P(?<part>[123])$') { return $null }
+  if ($WholeMonthCustomers -notcontains $Matches.name) { return $null }
+  $m = [int]$Matches.mm; $y = [int]$Matches.yyyy
+  return @{
+    Csv  = "{0}_{1}{2}" -f $Matches.name, $Matches.mm, $Matches.yyyy
+    Part = [int]$Matches.part
+    From = "$m/1/$y"
+    To   = "$m/$([DateTime]::DaysInMonth($y,$m))/$y"
+  }
 }
 
 
@@ -1038,6 +1061,21 @@ foreach ($xls in $xlsFiles) {
   if ($base.ToLower().EndsWith('.csv')) { $base = $base.Substring(0, $base.Length-4) }
   $csvPath = Join-Path $OutputFolder ($base + '.csv')
 
+  # Whole-month customers (P1 whole month, P2 1-15, P3 16-end): extract ONE whole-month
+  # CSV named without the _Pn suffix. P2/P3 are skipped when P1 (or the CSV) covers them.
+  $split = Get-WholeMonthSplit $base
+  if ($split) {
+    $csvPath = Join-Path $OutputFolder ($split.Csv + '.csv')
+    $p1Path  = Join-Path $SourceFolder ($split.Csv + '_P1' + $xls.Extension)
+    if ($split.Part -ne 1 -and ((Test-Path -LiteralPath $csvPath) -or (Test-Path -LiteralPath $p1Path))) {
+      Write-Host ("SKIP (whole month in {0}.csv): {1}" -f $split.Csv,$xls.Name) -ForegroundColor DarkGray
+      $log[$xls.Name] = [pscustomobject]@{ Customer=$base; RxOfficeName=''; File=$xls.Name; DateRange=''; Frequency=''
+        Status='SKIPPED'; Reason=("Whole-month customer: P{0} is covered by the single {1}.csv (from P1)" -f $split.Part,$split.Csv)
+        Csv=(Split-Path $csvPath -Leaf); UpdatedOn=$stamp }
+      continue
+    }
+  }
+
   $prior = $log[$xls.Name]
   $isDone = ($prior -and $prior.Status -eq 'DONE') -or (Test-Path -LiteralPath $csvPath)
   if ($isDone -and -not $Overwrite) {
@@ -1056,6 +1094,9 @@ foreach ($xls in $xlsFiles) {
       Status='ERROR'; Reason=(Explain 'meta-error' '')[1]; Csv=''; UpdatedOn=$stamp }
     continue
   }
+
+  # A whole-month customer with no P1 file: widen this half-month file to the whole month.
+  if ($split -and $split.Part -ne 1) { $meta.From = $split.From; $meta.To = $split.To }
 
   $range = "{0}..{1}" -f $meta.From, $meta.To
 

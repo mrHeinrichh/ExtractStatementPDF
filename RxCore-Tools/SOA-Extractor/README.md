@@ -61,6 +61,16 @@ types that row's RxOffice name into Accounting, in this order:
 **word-prefix**. If nothing matches, it types the raw `.xls` name and guesses the
 frequency. The name actually typed is recorded in the log's `RxOfficeName` column.
 
+## Whole-month customers (Carlos Simpao, Simpao Tolentino)
+
+These customers' AR data is split into three files per month:
+`<Name>_<MMyyyy>_P1.xls` (whole month), `_P2.xls` (1-15) and `_P3.xls` (16-end).
+Accounting is extracted **once**, for the whole month, as `<Name>_<MMyyyy>.csv`
+using P1's dates. P2/P3 are logged as SKIPPED (covered by that CSV). If there is no
+P1, the first of P2/P3 is extracted for the calendar month instead. The list lives in
+`$WholeMonthCustomers` (`src/01-Settings.ps1`) and uses the ARName from the Customer
+Master Record.
+
 ## Output  (folder: `<your folder> - SOA CSV`)
 
 | File | Contents |
@@ -121,6 +131,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `20-ConvertTo-MDY.ps1` | Parse `"Mar. 02, ' 26"` → `3/2/2026` |
 | `21-Read-XlsMeta.ps1` | Read customer + From/To dates from an `.xls` |
 | `22-Get-Candidates.ps1` | Shorter name forms for fuzzy matching |
+| `24-Get-WholeMonthSplit.ps1` | Detect a whole-month customer's `_P1/_P2/_P3` file → single CSV name + month range |
 | `30-Get-Dialog.ps1` / `31-Open-StatementDialog.ps1` | Find / open the Statement dialog |
 | `32-Field-XY.ps1` | Fixed screen offsets for each dialog field/button |
 | `33-Set-Customer.ps1` / `34-Set-DateField.ps1` | Fill customer / dates |

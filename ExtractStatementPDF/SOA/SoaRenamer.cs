@@ -50,6 +50,14 @@ namespace ExtractStatementPDF.SOA
             "SM", "JP", "LC", "BF", "GMA", "MTC", "DLSV", "OOS", "APECS",
         };
 
+        // Customers (by ARName in the Customer Master Record) whose AR data is split into
+        // _P1 (whole month), _P2 (1-15) and _P3 (16-end of month) instead of ""/_1st/_2nd.
+        // RxOffice is extracted once for the whole month (see SOA-Extractor).
+        private static readonly HashSet<string> WholeMonthSplitCustomers = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "CarlosSimpao", "SimpaoTolentino",
+        };
+
         private static readonly XNamespace TableNs = "urn:oasis:names:tc:opendocument:xmlns:table:1.0";
         private static readonly XNamespace OfficeNs = "urn:oasis:names:tc:opendocument:xmlns:office:1.0";
         private static readonly XNamespace TextNs = "urn:oasis:names:tc:opendocument:xmlns:text:1.0";
@@ -278,8 +286,15 @@ namespace ExtractStatementPDF.SOA
             foreach (var file in valid)
             {
                 var extension = Path.GetExtension(file.FullPath).ToLowerInvariant();
+                var customer = ToPascalCase(file.CustomerName!);
                 var suffix = GetPeriodSuffix(file.PeriodFrom!.Value, file.PeriodTo!.Value);
-                file.NewName = $"{ToPascalCase(file.CustomerName!)}_{file.PeriodFrom:MMyyyy}{suffix}{extension}";
+
+                if (WholeMonthSplitCustomers.Contains(customer))
+                {
+                    suffix = GetSplitSuffix(suffix);
+                }
+
+                file.NewName = $"{customer}_{file.PeriodFrom:MMyyyy}{suffix}{extension}";
             }
 
             // Same customer, period and format more than once (e.g. two full-month
@@ -290,7 +305,9 @@ namespace ExtractStatementPDF.SOA
                     .OrderBy(f => f.DocumentNo ?? f.FileName, StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-                if (group.Key.Contains("_1st") || group.Key.Contains("_2nd"))
+                var isSplitCustomer = WholeMonthSplitCustomers.Contains(group.Key.Split('_')[0]);
+
+                if (group.Key.Contains("_1st") || group.Key.Contains("_2nd") || isSplitCustomer)
                 {
                     foreach (var file in ordered.Skip(1))
                     {
@@ -315,6 +332,16 @@ namespace ExtractStatementPDF.SOA
             if (to.Day <= 15) return "_1st";
             if (from.Day >= 16) return "_2nd";
             return "";
+        }
+
+        private static string GetSplitSuffix(string periodSuffix)
+        {
+            return periodSuffix switch
+            {
+                "_1st" => "_P2",
+                "_2nd" => "_P3",
+                _ => "_P1",
+            };
         }
 
         private static string ToPascalCase(string name)

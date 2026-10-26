@@ -9,3 +9,8 @@ $Overwrite = $false
 
 # Where per-step screenshots and the run log are written.
 $ShotDir = Join-Path $env:TEMP 'soa_shots'
+
+# Customers (ARName from the Customer Master Record) whose AR data is split into
+# <Name>_<MMyyyy>_P1 (whole month), _P2 (1-15) and _P3 (16-end of month).
+# RxOffice is extracted ONCE for the whole month as <Name>_<MMyyyy>.csv.
+$WholeMonthCustomers = @('CarlosSimpao', 'SimpaoTolentino')

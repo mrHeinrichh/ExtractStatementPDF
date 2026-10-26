@@ -67,6 +67,21 @@ foreach ($xls in $xlsFiles) {
   if ($base.ToLower().EndsWith('.csv')) { $base = $base.Substring(0, $base.Length-4) }
   $csvPath = Join-Path $OutputFolder ($base + '.csv')
 
+  # Whole-month customers (P1 whole month, P2 1-15, P3 16-end): extract ONE whole-month
+  # CSV named without the _Pn suffix. P2/P3 are skipped when P1 (or the CSV) covers them.
+  $split = Get-WholeMonthSplit $base
+  if ($split) {
+    $csvPath = Join-Path $OutputFolder ($split.Csv + '.csv')
+    $p1Path  = Join-Path $SourceFolder ($split.Csv + '_P1' + $xls.Extension)
+    if ($split.Part -ne 1 -and ((Test-Path -LiteralPath $csvPath) -or (Test-Path -LiteralPath $p1Path))) {
+      Write-Host ("SKIP (whole month in {0}.csv): {1}" -f $split.Csv,$xls.Name) -ForegroundColor DarkGray
+      $log[$xls.Name] = [pscustomobject]@{ Customer=$base; RxOfficeName=''; File=$xls.Name; DateRange=''; Frequency=''
+        Status='SKIPPED'; Reason=("Whole-month customer: P{0} is covered by the single {1}.csv (from P1)" -f $split.Part,$split.Csv)
+        Csv=(Split-Path $csvPath -Leaf); UpdatedOn=$stamp }
+      continue
+    }
+  }
+
   $prior = $log[$xls.Name]
   $isDone = ($prior -and $prior.Status -eq 'DONE') -or (Test-Path -LiteralPath $csvPath)
   if ($isDone -and -not $Overwrite) {
@@ -85,6 +100,9 @@ foreach ($xls in $xlsFiles) {
       Status='ERROR'; Reason=(Explain 'meta-error' '')[1]; Csv=''; UpdatedOn=$stamp }
     continue
   }
+
+  # A whole-month customer with no P1 file: widen this half-month file to the whole month.
+  if ($split -and $split.Part -ne 1) { $meta.From = $split.From; $meta.To = $split.To }
 
   $range = "{0}..{1}" -f $meta.From, $meta.To
 
