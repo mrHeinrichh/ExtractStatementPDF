@@ -61,6 +61,20 @@ types that row's RxOffice name into Accounting, in this order:
 **word-prefix**. If nothing matches, it types the raw `.xls` name and guesses the
 frequency. The name actually typed is recorded in the log's `RxOfficeName` column.
 
+## Nearby-name fallback (e.g. Goco Optical → Goco Optical Indigent)
+
+If the matched customer produces **no statement** with any frequency, the tool tries
+the closest RxOffice names from the reference: names that start with every word of the
+AR name (or of the matched RxOffice name) and have extra words after them — e.g.
+`GOCO OPTICAL` → `GOCO OPTICAL INDIGENT`. Closest first (fewest extra words), at most
+`$MaxNearbyNames` (default 3, `src/01-Settings.ps1`; `0` turns it off). Each nearby name
+uses its own id and frequency.
+
+A statement found this way is logged as DONE with a Reason starting **`FALLBACK -`**
+and the RxOffice name actually used in `RxOfficeName` — check those rows, since a
+generic AR name (e.g. a chain without a branch) can land on a sibling branch. If a
+report opened but the export failed, the fallback is **not** used.
+
 ## Whole-month customers (Carlos Simpao, Simpao Tolentino)
 
 These customers' AR data is split into three files per month:
@@ -143,6 +157,7 @@ powershell -ExecutionPolicy Bypass -File build.ps1
 | `51-Load-Reference.ps1` | Load the reference (RxOffice / Contact export / simple) → name + frequency |
 | `52-Explain.ps1` | Map internal status → Result + human reason |
 | `53-Resolve-Reference.ps1` | Look a customer up → canonical name + frequency (exact + fuzzy) |
+| `54-Get-NearbyReferences.ps1` | Closest RxOffice names to try when the matched one produces no statement |
 | `60-Log-Load.ps1` / `61-Log-Save.ps1` | Load / save the resumable run log (CSV + Excel) |
 | `99-Main.ps1` | Program body: login check, browse reference, loop, resume, log |
 

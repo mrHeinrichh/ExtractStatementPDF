@@ -14,3 +14,7 @@ $ShotDir = Join-Path $env:TEMP 'soa_shots'
 # <Name>_<MMyyyy>_P1 (whole month), _P2 (1-15) and _P3 (16-end of month).
 # RxOffice is extracted ONCE for the whole month as <Name>_<MMyyyy>.csv.
 $WholeMonthCustomers = @('CarlosSimpao', 'SimpaoTolentino')
+
+# When the matched customer produces no statement, try up to this many nearby RxOffice
+# names (e.g. "GOCO OPTICAL" -> "GOCO OPTICAL INDIGENT"). 0 turns the fallback off.
+$MaxNearbyNames = 3

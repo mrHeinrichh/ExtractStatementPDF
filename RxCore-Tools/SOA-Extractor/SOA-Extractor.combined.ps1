@@ -44,6 +44,10 @@ $ShotDir = Join-Path $env:TEMP 'soa_shots'
 # RxOffice is extracted ONCE for the whole month as <Name>_<MMyyyy>.csv.
 $WholeMonthCustomers = @('CarlosSimpao', 'SimpaoTolentino')
 
+# When the matched customer produces no statement, try up to this many nearby RxOffice
+# names (e.g. "GOCO OPTICAL" -> "GOCO OPTICAL INDIGENT"). 0 turns the fallback off.
+$MaxNearbyNames = 3
+
 
 # ===================== src\02-Interop.ps1 =====================
 # ---- Win32 interop + UI Automation shortcuts ------------------------------
@@ -930,6 +934,35 @@ function Resolve-Reference([string]$name, $ref) {
 }
 
 
+# ===================== src\54-Get-NearbyReferences.ps1 =====================
+# Get-NearbyReferences : RxOffice names "near" a customer, tried when the matched name
+# produces no statement - e.g. AR "GOCO OPTICAL" -> "GOCO OPTICAL INDIGENT".
+# A nearby name starts with every word of the AR name or of the matched RxOffice name
+# (>= 2 words) and has extra words after them. Closest first (fewest extra words),
+# at most $MaxNearbyNames. Returns @( @{ Name; Id; Freq; Extra } ... ).
+function Get-NearbyReferences([string]$arName, [string]$matchedName, $ref) {
+  if (-not $ref -or -not $ref.ByKey -or $MaxNearbyNames -le 0) { return @() }
+  $bases = New-Object System.Collections.Generic.List[object]
+  foreach ($n in @($arName, $matchedName)) { $t = @(Tokenize $n); if ($t.Count -ge 2) { $bases.Add($t) } }
+  if ($bases.Count -eq 0) { return @() }
+
+  $skip = KeyOf $matchedName
+  $found = @{}
+  foreach ($e in $ref.ByKey.Values) {
+    $t = @($e.Tokens)
+    $k = KeyOf $e.Name
+    if ($k -eq $skip -or $found.ContainsKey($k)) { continue }
+    foreach ($b in $bases) {
+      if ($t.Count -gt $b.Count -and (Test-Prefix $b $t)) {
+        $found[$k] = [pscustomobject]@{ Name=$e.Name; Id=$e.Id; Freq=$e.Freq; Extra=($t.Count - $b.Count) }
+        break
+      }
+    }
+  }
+  return @($found.Values | Sort-Object Extra, Name | Select-Object -First $MaxNearbyNames)
+}
+
+
 # ===================== src\60-Log-Load.ps1 =====================
 # Load-Log : read the persistent run log (_SOA_Log.csv) into an ordered hashtable
 # keyed by File name. Each value is the last-known row for that .xls. Empty if the
@@ -1112,38 +1145,56 @@ foreach ($xls in $xlsFiles) {
   # Prefer searching by id (2nd/"Code" column of the reference CSV); fall back to the
   # resolved RxOffice name, then the raw .xls name, when no id is available.
   $searchInput = if ($r.Id) { $r.Id } elseif ($r.Name) { $r.Name } else { $meta.Customer }
-  if ($known) { $tryOrder = @($known) + ($FrequencyOrder | Where-Object { $_ -ne $known }) }
-  else        { $tryOrder = $FrequencyOrder }
+
+  # Attempts: the matched name first, then nearby RxOffice names (closest first) used only
+  # when the previous one produced no statement - e.g. "GOCO OPTICAL" -> "GOCO OPTICAL INDIGENT".
+  $attempts = @([pscustomobject]@{ Name=$custName; Search=$searchInput; Freq=$known; Via=$r.Via; Nearby=$false })
+  foreach ($n in (Get-NearbyReferences $meta.Customer $r.Name $ref)) {
+    $attempts += [pscustomobject]@{ Name=$n.Name; Search=$(if ($n.Id) { $n.Id } else { $n.Name }); Freq=$n.Freq
+      Via=("nearby '{0}'" -f $n.Name); Nearby=$true }
+  }
 
   $nameTag = if ($r.Via -eq 'exact' -or $r.Via -eq 'normalized') { " -> ref '$custName'" } elseif ($r.Name) { " -> $($r.Via)" } else { " (no ref match; raw name)" }
   $freqTag = if ($known) { "freq=$known" } else { "freq=unknown -> guess" }
   Write-Host ("PROCESS: {0}  [{1}]{2}  {3}  {4}" -f $xls.Name,$meta.Customer,$nameTag,$range,$freqTag) -ForegroundColor Cyan
 
-  $status='no-data'; $usedFreq=''
-  foreach ($freq in $tryOrder) {
-    try {
-      Reset-State
-      Open-StatementDialog | Out-Null
-      Set-Customer $searchInput       # <-- type the id from the reference (falls back to name)
-      if ($freq -ne 'Monthly') { Set-Frequency $freq }
-      Set-DateField 'From' $meta.From; Set-DateField 'To' $meta.To
-      Shot ("{0}_{1}_form" -f $base,$freq); Click-OK; Start-Sleep -Seconds 5
-      if (-not (Get-ReportWindow)) { Write-Host ("   {0}: no report -> next" -f $freq) -ForegroundColor Yellow; Close-Dialog; continue }
-      Shot ("{0}_{1}_report" -f $base,$freq)
-      $status = Export-Csv-FromReport $csvPath; $usedFreq = $freq; Close-Report
-      Write-Host ("   {0}: {1}" -f $freq,$status) -ForegroundColor Green
-      if ($status -in @('saved','overwritten')) { break }
-    } catch {
-      Write-Host ("   {0}: ERROR {1}" -f $freq,$_.Exception.Message) -ForegroundColor Red
-      Close-Dialog; Close-Report; $status = "error: $($_.Exception.Message)"
+  $status='no-data'; $usedFreq=''; $used=$attempts[0]
+  foreach ($a in $attempts) {
+    if ($a.Nearby) { Write-Host ("   no statement -> trying nearby RxOffice name '{0}' ({1})" -f $a.Name,$a.Search) -ForegroundColor Yellow }
+    if ($a.Freq) { $tryOrder = @($a.Freq) + ($FrequencyOrder | Where-Object { $_ -ne $a.Freq }) }
+    else         { $tryOrder = $FrequencyOrder }
+    $used = $a
+    foreach ($freq in $tryOrder) {
+      try {
+        Reset-State
+        Open-StatementDialog | Out-Null
+        Set-Customer $a.Search          # <-- type the id from the reference (falls back to name)
+        if ($freq -ne 'Monthly') { Set-Frequency $freq }
+        Set-DateField 'From' $meta.From; Set-DateField 'To' $meta.To
+        Shot ("{0}_{1}_form" -f $base,$freq); Click-OK; Start-Sleep -Seconds 5
+        if (-not (Get-ReportWindow)) { Write-Host ("   {0}: no report -> next" -f $freq) -ForegroundColor Yellow; Close-Dialog; continue }
+        Shot ("{0}_{1}_report" -f $base,$freq)
+        $status = Export-Csv-FromReport $csvPath; $usedFreq = $freq; Close-Report
+        Write-Host ("   {0}: {1}" -f $freq,$status) -ForegroundColor Green
+        if ($status -in @('saved','overwritten')) { break }
+      } catch {
+        Write-Host ("   {0}: ERROR {1}" -f $freq,$_.Exception.Message) -ForegroundColor Red
+        Close-Dialog; Close-Report; $status = "error: $($_.Exception.Message)"
+      }
     }
+    # Only a true "no statement" moves on to the next nearby name; success or an
+    # automation/export error stops here so a nearby customer never masks a real problem.
+    if ($status -ne 'no-data') { break }
   }
 
   $ex = Explain $status $usedFreq          # -> @(SUCCESS|FAILED|SKIPPED, reason)
   $logStatus = switch ($ex[0]) { 'SUCCESS' {'DONE'} 'SKIPPED' {'SKIPPED'} default {'ERROR'} }
-  $reason = if ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed '$searchInput' (match: $($r.Via))" }
+  $reason = if ($logStatus -eq 'DONE' -and $used.Nearby) { "FALLBACK - $($ex[1]); '$custName' had no statement, used nearest RxOffice name '$($used.Name)' (typed '$($used.Search)')" }
+            elseif ($logStatus -eq 'DONE' -and $r.Name) { "$($ex[1]); typed '$searchInput' (match: $($r.Via))" }
+            elseif ($attempts.Count -gt 1) { "$($ex[1]); also tried nearby: $((@($attempts | Select-Object -Skip 1 | ForEach-Object { $_.Name })) -join ', ')" }
             else { $ex[1] }
-  $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; RxOfficeName=$custName; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
+  $logName = if ($logStatus -eq 'DONE') { $used.Name } else { $custName }
+  $log[$xls.Name] = [pscustomobject]@{ Customer=$meta.Customer; RxOfficeName=$logName; File=$xls.Name; DateRange=$range; Frequency=$usedFreq
     Status=$logStatus; Reason=$reason; Csv=$(if ($logStatus -eq 'DONE') { Split-Path $csvPath -Leaf } else { '' }); UpdatedOn=$stamp }
 
   $did++; $processed++
