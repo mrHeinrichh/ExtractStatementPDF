@@ -14,7 +14,16 @@
     <PackageReference Include="ExcelDataReader" Version="3.8.0" />
     <PackageReference Include="ExcelDataReader.DataSet" Version="3.8.0" />
     <PackageReference Include="itext" Version="9.3.0" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
+    <PackageReference Include="MySqlBackup.NET.MySqlConnector" Version="2.7.1" />
+    <PackageReference Include="MySqlConnector" Version="2.6.2" />
     <PackageReference Include="System.Reactive" Version="6.1.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Launched by the "Run SOA Extractor" button. -->
+    <None Include="..\RxCore-Tools\SOA-Extractor\SOA-Extractor.exe" Link="Tools\SOA-Extractor.exe" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

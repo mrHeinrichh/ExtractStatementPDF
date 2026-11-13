@@ -3,6 +3,8 @@ using ExtractStatementPDF.Consolidation;
 using ExtractStatementPDF.RxOffice;
 using System.Reactive.Linq;
 using ExtractStatementPDF.SOA;
+using ExtractStatementPDF.Sql;
+using System.Diagnostics;
 
 namespace ExtractStatementPDF
 {
@@ -13,6 +15,8 @@ namespace ExtractStatementPDF
         private RxOfficeStatement? rxOfficeStatement;
 
         private IDisposable? subscription;
+
+        private SqlQueryForm? sqlQueryForm;
 
         public Form1()
         {
@@ -212,6 +216,63 @@ namespace ExtractStatementPDF
             catch (Exception ex)
             {
                 txtUpdate.AppendText(Environment.NewLine + $"Renaming aborted due to error: {ex.Message}");
+            }
+        }
+
+        private async void button8_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                var path = Path.Combine(AppContext.BaseDirectory, "Tools", "SOA-Extractor.exe");
+
+                if (!File.Exists(path))
+                {
+                    path = SelectFile("SOA Extractor (SOA-Extractor.exe)|SOA-Extractor.exe|Programs (*.exe)|*.exe");
+                    if (string.IsNullOrEmpty(path)) return;
+                }
+
+                // The extractor drives Accounting.exe and shows its own console and dialogs,
+                // so it runs in its own window; this form only reports when it starts/ends.
+                using var process = Process.Start(new ProcessStartInfo(path)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(path)!,
+                });
+
+                if (process == null)
+                {
+                    txtUpdate.AppendText(Environment.NewLine + "SOA Extractor did not start.");
+                    return;
+                }
+
+                button8.Enabled = false;
+                txtUpdate.AppendText(Environment.NewLine + $"SOA Extractor started ({path}).");
+
+                await process.WaitForExitAsync();
+
+                txtUpdate.AppendText(Environment.NewLine + $"SOA Extractor finished (exit code {process.ExitCode}).");
+            }
+            catch (Exception ex)
+            {
+                txtUpdate.AppendText(Environment.NewLine + $"SOA Extractor could not run: {ex.Message}");
+            }
+            finally
+            {
+                button8.Enabled = true;
+            }
+        }
+
+        private void button9_Click(object sender, EventArgs e)
+        {
+            if (sqlQueryForm == null || sqlQueryForm.IsDisposed)
+            {
+                sqlQueryForm = new SqlQueryForm();
+                sqlQueryForm.Show();
+            }
+            else
+            {
+                if (sqlQueryForm.WindowState == FormWindowState.Minimized) sqlQueryForm.WindowState = FormWindowState.Normal;
+                sqlQueryForm.Activate();
             }
         }
 
