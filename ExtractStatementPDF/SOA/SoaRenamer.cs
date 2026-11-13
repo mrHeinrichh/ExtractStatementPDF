@@ -71,7 +71,7 @@ namespace ExtractStatementPDF.SOA
         {
             var files = Directory
                 .EnumerateFiles(directory, "*.*", SearchOption.TopDirectoryOnly)
-                .Where(f => SupportedExtensions.Contains(Path.GetExtension(f), StringComparer.OrdinalIgnoreCase))
+                .Where(f => GetFormat(f) != null)
                 .OrderBy(f => f, StringComparer.OrdinalIgnoreCase)
                 .Select(ReadHeader)
                 .ToList();
@@ -109,6 +109,17 @@ namespace ExtractStatementPDF.SOA
             return log;
         }
 
+        // ".xls" or ".ods" from the file name, also when the dot before the extension
+        // is missing (e.g. "goco 1-15. 37666xls"); null for any other file.
+        private static string? GetFormat(string path)
+        {
+            var name = Path.GetFileName(path);
+
+            return SupportedExtensions.FirstOrDefault(extension =>
+                name.EndsWith(extension, StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith(extension[1..], StringComparison.OrdinalIgnoreCase));
+        }
+
         private static SoaFile ReadHeader(string path)
         {
             var file = new SoaFile { FullPath = path };
@@ -117,7 +128,7 @@ namespace ExtractStatementPDF.SOA
 
             try
             {
-                rows = Path.GetExtension(path).ToLowerInvariant() switch
+                rows = GetFormat(path) switch
                 {
                     ".ods" => ReadOdsRows(path),
                     _ => ReadXlsRows(path),
@@ -285,7 +296,7 @@ namespace ExtractStatementPDF.SOA
 
             foreach (var file in valid)
             {
-                var extension = Path.GetExtension(file.FullPath).ToLowerInvariant();
+                var extension = GetFormat(file.FullPath)!;
                 var customer = ToPascalCase(file.CustomerName!);
                 var suffix = GetPeriodSuffix(file.PeriodFrom!.Value, file.PeriodTo!.Value);
 
