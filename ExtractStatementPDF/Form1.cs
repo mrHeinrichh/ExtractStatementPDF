@@ -276,6 +276,46 @@ namespace ExtractStatementPDF
             }
         }
 
+        private async void button10_Click(object sender, EventArgs e)
+        {
+            using var dialog = new OrdersCsvForm();
+            if (dialog.ShowDialog(this) != DialogResult.OK || dialog.Session == null) return;
+
+            var session = dialog.Session;
+            var database = dialog.Database;
+            var (from, to) = (dialog.From, dialog.To);
+
+            var wholeMonth = from.Day == 1 && to == from.AddMonths(1).AddDays(-1);
+            using var saveDialog = new SaveFileDialog
+            {
+                Filter = "CSV files (*.csv)|*.csv|All files (*.*)|*.*",
+                FileName = wholeMonth ? $"Orders_{from:yyyy-MM}.csv" : $"Orders_{from:yyyy-MM-dd}_to_{to:yyyy-MM-dd}.csv",
+                AddExtension = true,
+            };
+
+            if (saveDialog.ShowDialog(this) != DialogResult.OK) return;
+
+            var path = saveDialog.FileName;
+            button10.Enabled = false;
+            txtUpdate.AppendText(Environment.NewLine + $"Downloading orders {from:yyyy-MM-dd} to {to:yyyy-MM-dd} from {session.DescribeTarget()} ({database})...");
+
+            try
+            {
+                var rows = await Task.Run(() => OrdersCsvExport.Download(session, database, from, to, path));
+                txtUpdate.AppendText(Environment.NewLine + $"Saved {rows:N0} order line(s) to {path}.");
+            }
+            catch (Exception ex)
+            {
+                txtUpdate.AppendText(Environment.NewLine + $"Orders download failed: {ex.Message}");
+                MessageBox.Show(this, $"Orders download failed:{Environment.NewLine}{ex.Message}{Environment.NewLine}{Environment.NewLine}{session.ConnectionHint()}",
+                    "Download Orders CSV", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                button10.Enabled = true;
+            }
+        }
+
         private static string SelectCSV()
         {
             return SelectFile("CSV files (*.csv)|*.csv|All files (*.*)|*.*");

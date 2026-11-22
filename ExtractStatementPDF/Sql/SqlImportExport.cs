@@ -2,6 +2,7 @@ using CsvHelper;
 using MySqlConnector;
 using OfficeOpenXml;
 using System.Data;
+using System.Data.Common;
 using System.Globalization;
 using System.Text;
 
@@ -99,6 +100,44 @@ namespace ExtractStatementPDF.Sql
             {
                 foreach (DataColumn column in table.Columns) csv.WriteField(FormatValue(row[column]));
                 csv.NextRecord();
+            }
+        }
+
+        // Streams a query's rows into a CSV without holding them in memory. Writes to
+        // "<path>.part" first so a failed download never leaves a half file behind.
+        // Returns the number of rows written.
+        public static long ExportCsv(DbDataReader reader, string path)
+        {
+            var partial = path + ".part";
+            long rows = 0;
+
+            try
+            {
+                using (var writer = new StreamWriter(partial, false, new UTF8Encoding(true)))
+                using (var csv = new CsvWriter(writer, CultureInfo.InvariantCulture))
+                {
+                    for (var i = 0; i < reader.FieldCount; i++) csv.WriteField(reader.GetName(i));
+                    csv.NextRecord();
+
+                    while (reader.Read())
+                    {
+                        for (var i = 0; i < reader.FieldCount; i++)
+                        {
+                            csv.WriteField(FormatValue(reader.IsDBNull(i) ? DBNull.Value : reader.GetValue(i)));
+                        }
+
+                        csv.NextRecord();
+                        rows++;
+                    }
+                }
+
+                File.Move(partial, path, overwrite: true);
+                return rows;
+            }
+            catch
+            {
+                if (File.Exists(partial)) File.Delete(partial);
+                throw;
             }
         }
 
